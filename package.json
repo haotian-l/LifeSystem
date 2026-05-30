@@ -1,0 +1,21 @@
+{
+  "name": "self-digitalization-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm run build && npm start",
+    "dev:ui": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "start": "node --no-warnings server/index.mjs",
+    "check": "vite build"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "lucide-react": "^0.468.0",
+    "vite": "^6.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {}
+}
