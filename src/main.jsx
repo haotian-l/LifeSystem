@@ -10,55 +10,97 @@ import {
   Clock3,
   Edit3,
   Flag,
+  Images,
   ListChecks,
   ListTodo,
-  MessageSquareText,
   Plus,
   RefreshCw,
   Repeat2,
-  Send,
   Sparkles,
   Tags,
   Target,
   Trash2,
+  UsersRound,
   X,
 } from 'lucide-react';
 import './styles.css';
 
 const views = [
   { id: 'today', label: '今日', icon: Clock3 },
+  { id: 'timeline', label: '时间线', icon: ListChecks },
   { id: 'goals', label: '目标', icon: Target },
   { id: 'tasks', label: '任务', icon: ListTodo },
-  { id: 'timeline', label: '时间线', icon: ListChecks },
   { id: 'habits', label: '习惯', icon: Repeat2 },
   { id: 'schedule', label: '日程', icon: CalendarClock },
   { id: 'tags', label: '标签', icon: Tags },
   { id: 'reports', label: '复盘', icon: Sparkles },
+  { id: 'moments', label: '高光', icon: Images },
+  { id: 'people-relations', label: '关系', icon: UsersRound },
 ];
 
-const levelLabels = { year: '年度', quarter: '季度', month: '月度', week: '周度', custom: '自定义' };
-const statusLabels = { active: '进行中', paused: '暂停', done: '完成', abandoned: '放弃', planned: '计划中', cancelled: '取消', missed: '错过' };
+const levelLabels = { day: '每日', week: '每周', month: '每月', year: '每年' };
+const goalLevelOrder = ['day', 'week', 'month', 'year'];
+const statusLabels = { active: '进行中', paused: '暂停', done: '完成', not_done: '未完成', abandoned: '放弃', deleted: '删除', planned: '计划中', cancelled: '取消', missed: '错过' };
 const taskStatusLabels = { todo: '待做', doing: '进行中', blocked: '阻塞', done: '完成', abandoned: '放弃', deleted: '删除' };
 const taskCurrentStatusOrder = ['doing', 'todo', 'blocked'];
 const taskWorkflowStatusOrder = ['doing', 'todo', 'blocked', 'done', 'abandoned'];
 const taskArchiveStatusOrder = ['done', 'abandoned', 'deleted'];
-const goalArchiveStatusLabels = { expired: '过期', done: '完成', abandoned: '放弃' };
-const goalArchiveStatusOrder = ['expired', 'done', 'abandoned'];
-const cadenceLabels = { daily: '每天', weekly: '每周', custom: '自定义' };
+const goalWorkflowStatusOrder = ['active', 'done', 'not_done', 'abandoned'];
+const goalArchiveStatusLabels = { done: '完成', not_done: '未完成', abandoned: '放弃' };
+const goalArchiveStatusOrder = ['done', 'not_done', 'abandoned'];
+const goalViewOrder = ['all', ...goalLevelOrder];
+const goalTabLabels = { all: '全部', day: '日目标', week: '周目标', month: '月目标', year: '年目标' };
+const goalFocusTitles = { all: '全部目标', day: '今日目标', week: '本周目标', month: '本月目标', year: '今年目标' };
 const periodLabels = { day: '日报', week: '周报', month: '月报' };
-const tagCategoryLabels = {
-  activity_type: '活动类型',
-  work_mode: '工作模式',
-  value_signal: '价值信号',
-  state_signal: '状态信号',
-  life_area: '生活领域',
+const reportTargetLabels = { day: '昨天', week: '上周', month: '上个月' };
+const reviewTypeLabels = { day: '日复盘', week: '周复盘', month: '月复盘', topic: '主题复盘' };
+const reviewTypeOrder = ['day', 'week', 'month', 'topic'];
+const momentRangeLabels = { month: '本月', week: '本周', year: '今年', all: '全部', custom: '自定义' };
+const momentRangeOrder = ['year', 'month', 'week', 'all', 'custom'];
+const peopleRelationSources = [
+  { id: 'all', label: '全部' },
+  { id: 'timeline', label: '时间线' },
+  { id: 'task', label: '任务' },
+  { id: 'schedule', label: '日程' },
+  { id: 'moment', label: '高光' },
+  { id: 'review', label: '复盘' },
+  { id: 'goal', label: '目标' },
+  { id: 'habit', label: '习惯' },
+  { id: 'reminder', label: '提醒' },
+];
+const personRelationshipLabels = {
+  mentor: '导师',
+  teacher: '老师',
+  friend: '朋友',
+  family: '家人',
+  colleague: '同事',
+  partner: '伙伴',
+  client: '客户',
 };
-const tagCategoryOptions = ['activity_type', 'work_mode', 'value_signal', 'state_signal', 'life_area'];
+const personLinkRoleLabels = {
+  participant: '参与者',
+  owner: '负责人',
+  collaborator: '协作者',
+  mentioned: '被提到',
+  requester: '提出者',
+  reviewer: '评审者',
+  audience: '面向对象',
+};
+const tagCategoryLabels = {
+  activity_type: '活动',
+  work_mode: '工作模式',
+  value_signal: '价值',
+  state_signal: '过程状态',
+  energy_state: '身体精力',
+  mood_state: '情绪',
+  environment: '场景',
+  life_area: '领域',
+};
+const tagCategoryOptions = ['activity_type', 'work_mode', 'value_signal', 'state_signal', 'energy_state', 'mood_state', 'environment', 'life_area'];
 const tagCategoryRank = new Map(tagCategoryOptions.map((category, index) => [category, index]));
 
 const api = {
   dashboard: () => request('/api/dashboard'),
-  chat: (text) => request('/api/chat', { method: 'POST', body: JSON.stringify({ text }) }),
   createGoal: (payload) => request('/api/goals', { method: 'POST', body: JSON.stringify(payload) }),
   updateGoal: (goalId, payload) => request(`/api/goals/${goalId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   updateTimeline: (timelineId, payload) => request(`/api/timeline/${timelineId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
@@ -68,10 +110,11 @@ const api = {
   updateTag: (tagId, payload) => request(`/api/tags/${encodeURIComponent(tagId)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteTag: (tagId) => request(`/api/tags/${encodeURIComponent(tagId)}`, { method: 'DELETE' }),
   createHabit: (payload) => request('/api/habits', { method: 'POST', body: JSON.stringify(payload) }),
+  updateHabit: (habitId, payload) => request(`/api/habits/${habitId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   logHabit: (habitId, payload) => request(`/api/habits/${habitId}/log`, { method: 'POST', body: JSON.stringify(payload) }),
   createSchedule: (payload) => request('/api/schedule', { method: 'POST', body: JSON.stringify(payload) }),
   updateSchedule: (eventId, payload) => request(`/api/schedule/${eventId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
-  report: (periodType) => request('/api/reports/generate', { method: 'POST', body: JSON.stringify({ periodType }) }),
+  updateReview: (reviewId, payload) => request(`/api/reviews/${reviewId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
 };
 
 async function request(path, options = {}) {
@@ -87,9 +130,6 @@ function App() {
   const [data, setData] = useState(null);
   const [activeView, setActiveView] = useState('today');
   const [loadError, setLoadError] = useState('');
-  const [chatText, setChatText] = useState('');
-  const [chatState, setChatState] = useState('idle');
-  const [composerOpen, setComposerOpen] = useState(false);
   const [editor, setEditor] = useState(null);
   const [activeReport, setActiveReport] = useState('day');
   const [selectedDate, setSelectedDate] = useState(() => localDateKey(new Date()));
@@ -106,21 +146,6 @@ function App() {
     });
   }, []);
 
-  async function submitChat(event) {
-    event.preventDefault();
-    const text = chatText.trim();
-    if (!text) return;
-
-    setChatState('sending');
-    try {
-      setData(await api.chat(text));
-      setChatText('');
-      setComposerOpen(false);
-    } finally {
-      setChatState('idle');
-    }
-  }
-
   async function saveEditor(payload) {
     if (editor?.type === 'goal') {
       setData(await api.updateGoal(editor.item.goal_id, payload));
@@ -133,6 +158,10 @@ function App() {
 
   async function createGoal(payload) {
     setData(await api.createGoal(payload));
+  }
+
+  async function updateGoal(goalId, payload) {
+    setData(await api.updateGoal(goalId, payload));
   }
 
   async function createTask(payload) {
@@ -155,13 +184,16 @@ function App() {
     setData(await api.deleteTag(tagId));
   }
 
-  async function generateReport(periodType) {
-    setActiveReport(periodType);
-    setData(await api.report(periodType));
+  async function updateReview(reviewId, payload) {
+    setData(await api.updateReview(reviewId, payload));
   }
 
   async function createHabit(payload) {
     setData(await api.createHabit(payload));
+  }
+
+  async function updateHabit(habitId, payload) {
+    setData(await api.updateHabit(habitId, payload));
   }
 
   async function logHabit(habitId, payload) {
@@ -195,8 +227,8 @@ function App() {
     );
   }
 
-  const openTimeline = data.timeline.find((item) => !item.end_at);
-  const latestReport = data.reports.find((report) => report.period_type === activeReport) || data.reports[0];
+  const latestReportRange = completedReviewRange(activeReport);
+  const latestReport = data.reports.find((report) => report.period_type === activeReport && reviewOverlapsRange(report, latestReportRange)) || null;
 
   return (
     <main className="app-shell">
@@ -248,6 +280,7 @@ function App() {
             goals={data.goals}
             tags={data.tags}
             onCreate={createGoal}
+            onUpdate={updateGoal}
             onEdit={(goal) => setEditor({ type: 'goal', item: goal })}
           />
         )}
@@ -260,6 +293,9 @@ function App() {
             onUpdate={updateTask}
           />
         )}
+        {activeView === 'people-relations' && (
+          <PeopleRelationsView people={data.people || []} />
+        )}
         {activeView === 'timeline' && (
           <TimelineView
             items={data.timeline}
@@ -270,8 +306,10 @@ function App() {
         {activeView === 'habits' && (
           <HabitsView
             habits={data.habits}
+            habitLogs={data.habitLogs || []}
             tags={data.tags}
             onCreate={createHabit}
+            onUpdate={updateHabit}
             onLog={logHabit}
           />
         )}
@@ -292,36 +330,19 @@ function App() {
         )}
         {activeView === 'reports' && (
           <ReportsView
-            reports={data.reports}
+            reviews={data.reviews || []}
+            tags={data.tags}
             activeReport={activeReport}
             latestReport={latestReport}
-            metrics={data.metrics}
-            onGenerate={generateReport}
+            onSelectReport={setActiveReport}
+            onUpdateReview={updateReview}
           />
+        )}
+        {activeView === 'moments' && (
+          <MomentsView moments={data.moments || []} />
         )}
 
       </section>
-
-      <div className="composer-dock">
-        {composerOpen ? (
-          <CaptureBar
-            value={chatText}
-            state={chatState}
-            suggestion={openTimeline ? `正在记录：${openTimeline.title}` : data.aiSuggestion}
-            onChange={setChatText}
-            onSubmit={submitChat}
-          />
-        ) : null}
-        <button
-          type="button"
-          className="capture-fab"
-          onClick={() => setComposerOpen((value) => !value)}
-          aria-label={composerOpen ? '收起快速记录' : '打开快速记录'}
-        >
-          {composerOpen ? <X size={18} /> : <MessageSquareText size={18} />}
-          <span>{composerOpen ? '收起' : '记录'}</span>
-        </button>
-      </div>
 
       {editor && (
         <EditorDrawer
@@ -333,26 +354,6 @@ function App() {
         />
       )}
     </main>
-  );
-}
-
-function CaptureBar({ value, state, suggestion, onChange, onSubmit }) {
-  return (
-    <section className="capture-shell">
-      <form className="capture-form" onSubmit={onSubmit}>
-        <MessageSquareText size={18} />
-        <input
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder="我开始做... / 做完了，休息一下 / 今天跳舞放松，记成高光"
-        />
-        <button type="submit" disabled={state === 'sending'}>
-          <Send size={16} />
-          <span>{state === 'sending' ? '保存中' : '发送'}</span>
-        </button>
-      </form>
-      <p>{suggestion}</p>
-    </section>
   );
 }
 
@@ -521,7 +522,7 @@ function TodayView({ data, selectedDate, latestReport, onLogHabit, onEditTimelin
   const topGoals = data.goals.filter(isCurrentGoal).slice(0, 3);
   const todayTimeline = data.timeline.filter((item) => isSameLocalDate(item.start_at, selectedDate));
   const currentTasks = data.tasks.filter((task) => taskCurrentStatusOrder.includes(task.status)).slice(0, 3);
-  const todayHabits = data.habits.slice(0, 3);
+  const todayHabits = data.habits.filter((habit) => habit.status === 'active').slice(0, 3);
   const upcoming = data.schedule.filter((event) => isSameLocalDate(event.start_at, selectedDate)).slice(0, 3);
 
   return (
@@ -612,17 +613,28 @@ function TodayRow({ eyebrow, title, onAction, children }) {
   );
 }
 
-function HabitsView({ habits, tags, onCreate, onLog }) {
+function HabitsView({ habits, habitLogs, tags, onCreate, onUpdate, onLog }) {
   const makeDraft = () => ({
     title: '',
-    cadence: 'daily',
-    targetCount: 1,
     note: '',
     tagIds: tagIdsByKeys(tags, ['high_value']),
   });
   const [draft, setDraft] = useState(makeDraft);
   const [creating, setCreating] = useState(false);
-  const doneCount = habits.filter((habit) => habit.todayLog?.status === 'done').length;
+  const [mode, setMode] = useState('current');
+  const [archiveQuery, setArchiveQuery] = useState('');
+  const currentHabits = habits.filter((habit) => habit.status === 'active');
+  const archivedHabits = habits.filter((habit) => habit.status === 'archived');
+  const query = archiveQuery.trim().toLowerCase();
+  const doneCount = currentHabits.filter((habit) => habit.todayLog?.status === 'done').length;
+  const filteredArchiveHabits = archivedHabits.filter((habit) => {
+    if (!query) return true;
+    return [
+      habit.title,
+      habit.note,
+      ...(habit.tags || []),
+    ].filter(Boolean).join(' ').toLowerCase().includes(query);
+  });
 
   function openCreate() {
     setDraft(makeDraft());
@@ -631,20 +643,74 @@ function HabitsView({ habits, tags, onCreate, onLog }) {
 
   async function submit(event) {
     event.preventDefault();
-    if (!draft.title.trim()) return;
-    await onCreate(draft);
+    const title = draft.title.trim();
+    if (!title) {
+      event.currentTarget.reportValidity();
+      return;
+    }
+    await onCreate({ ...draft, title });
     setDraft(makeDraft());
     setCreating(false);
   }
 
+  async function updateHabitStatus(habit, status) {
+    await onUpdate(habit.habit_id, { status });
+  }
+
   return (
     <section className="panel habits-layout">
-      <SectionHeader eyebrow="今日进度" title={`${doneCount}/${habits.length} 已完成`} action="新建" onAction={openCreate} />
-      <div className="habit-list">
-        {habits.map((habit) => (
-          <HabitRow key={habit.habit_id} habit={habit} onLog={onLog} />
-        ))}
+      <SectionHeader eyebrow="今日进度" title={`${doneCount}/${currentHabits.length} 已完成 · ${archivedHabits.length} 个归档`} action="新建" onAction={openCreate} />
+      <div className="archive-page-tabs" aria-label="习惯视图">
+        <button type="button" className={mode === 'current' ? 'active' : ''} onClick={() => setMode('current')}>
+          当前习惯
+        </button>
+        <button type="button" className={mode === 'archive' ? 'active' : ''} onClick={() => setMode('archive')}>
+          归档
+        </button>
       </div>
+
+      {mode === 'current' ? (
+        <>
+          <div className="habit-list">
+            {currentHabits.map((habit) => (
+              <HabitRow
+                key={habit.habit_id}
+                habit={habit}
+                onLog={onLog}
+                onArchive={() => updateHabitStatus(habit, 'archived')}
+              />
+            ))}
+            {!currentHabits.length ? <p className="muted-text">当前没有习惯。</p> : null}
+          </div>
+          <HabitHeatmap habits={currentHabits} logs={habitLogs} />
+        </>
+      ) : (
+        <section className="habit-archive-view">
+          <header className="habit-archive-head">
+            <div>
+              <p className="eyebrow">归档</p>
+              <h2>{filteredArchiveHabits.length} 个历史习惯</h2>
+            </div>
+            <input
+              className="habit-archive-search"
+              value={archiveQuery}
+              onChange={(event) => setArchiveQuery(event.target.value)}
+              placeholder="搜索习惯或标签"
+            />
+          </header>
+          <div className="habit-archive-list">
+            {filteredArchiveHabits.map((habit) => (
+              <HabitArchiveRow
+                key={habit.habit_id}
+                habit={habit}
+                onRestore={() => updateHabitStatus(habit, 'active')}
+                onDelete={() => updateHabitStatus(habit, 'deleted')}
+              />
+            ))}
+            {!filteredArchiveHabits.length ? <p className="muted-text">没有符合条件的历史习惯。</p> : null}
+          </div>
+        </section>
+      )}
 
       {creating ? (
         <FormModal title="新增习惯" onClose={() => setCreating(false)}>
@@ -652,17 +718,6 @@ function HabitsView({ habits, tags, onCreate, onLog }) {
             <label>
               习惯
               <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="例如：每天记录一句 timeline" />
-            </label>
-            <label>
-              频率
-              <select value={draft.cadence} onChange={(event) => setDraft({ ...draft, cadence: event.target.value })}>
-                <option value="daily">每天</option>
-                <option value="weekly">每周</option>
-              </select>
-            </label>
-            <label>
-              目标次数
-              <input type="number" min="1" value={draft.targetCount} onChange={(event) => setDraft({ ...draft, targetCount: event.target.value })} />
             </label>
             <label>
               备注
@@ -693,10 +748,13 @@ function TasksView({ tasks, goals, tags, onCreate, onUpdate }) {
   const [draft, setDraft] = useState(makeDraft);
   const [creating, setCreating] = useState(false);
   const [mode, setMode] = useState('current');
+  const [boardView, setBoardView] = useState('status');
   const [archiveStatus, setArchiveStatus] = useState('all');
   const [archiveQuery, setArchiveQuery] = useState('');
   const [deleteTarget, setDeleteTarget] = useState(null);
   const currentTasks = tasks.filter((task) => taskCurrentStatusOrder.includes(task.status));
+  const dueGroups = buildTaskDueGroups(currentTasks);
+  const goalGroups = buildTaskGoalGroups(currentTasks);
   const archivedTasks = sortTasksByArchiveDate(tasks.filter((task) => taskArchiveStatusOrder.includes(task.status)));
   const query = archiveQuery.trim().toLowerCase();
   const activeCount = currentTasks.filter((task) => ['todo', 'doing'].includes(task.status)).length;
@@ -750,7 +808,7 @@ function TasksView({ tasks, goals, tags, onCreate, onUpdate }) {
   return (
     <section className="panel tasks-layout">
       <SectionHeader eyebrow="行动状态" title={`${activeCount} 个推进中 · ${blockedCount} 个阻塞 · 本周完成 ${weekDoneCount}`} action="新建" onAction={openCreate} />
-      <div className="task-page-tabs" aria-label="任务视图">
+      <div className="archive-page-tabs" aria-label="任务视图">
         <button type="button" className={mode === 'current' ? 'active' : ''} onClick={() => setMode('current')}>
           当前任务
         </button>
@@ -761,30 +819,40 @@ function TasksView({ tasks, goals, tags, onCreate, onUpdate }) {
 
       {mode === 'current' ? (
         <>
-          <div className="task-board current-task-board">
-            {taskCurrentStatusOrder.map((status) => {
-              const group = currentTasks.filter((task) => task.status === status);
-              return (
-                <section className="task-column" key={status}>
-                  <header>
-                    <span>{taskStatusLabels[status]}</span>
-                    <em>{group.length}</em>
-                  </header>
-                  <div className="task-stack">
-                    {group.map((task) => (
-                      <TaskCard
-                        key={task.task_id}
-                        task={task}
-                        onStatus={(nextStatus) => updateTaskStatus(task, nextStatus)}
-                        onDelete={() => setDeleteTarget(task)}
-                      />
-                    ))}
-                    {!group.length ? <p className="muted-text">暂无</p> : null}
-                  </div>
-                </section>
-              );
-            })}
+          <div className="task-board-tabs" aria-label="任务看板">
+            <button type="button" className={boardView === 'status' ? 'active' : ''} onClick={() => setBoardView('status')}>按状态</button>
+            <button type="button" className={boardView === 'due' ? 'active' : ''} onClick={() => setBoardView('due')}>按截止</button>
+            <button type="button" className={boardView === 'goal' ? 'active' : ''} onClick={() => setBoardView('goal')}>按目标</button>
           </div>
+
+          {boardView === 'status' ? (
+            <TaskBoard
+              groups={taskCurrentStatusOrder.map((status) => ({
+                key: status,
+                title: taskStatusLabels[status],
+                tasks: currentTasks.filter((task) => task.status === status),
+              }))}
+              onStatus={updateTaskStatus}
+              onDelete={setDeleteTarget}
+              fixedColumns
+            />
+          ) : null}
+
+          {boardView === 'due' ? (
+            <TaskBoard
+              groups={dueGroups}
+              onStatus={updateTaskStatus}
+              onDelete={setDeleteTarget}
+            />
+          ) : null}
+
+          {boardView === 'goal' ? (
+            <TaskBoard
+              groups={goalGroups}
+              onStatus={updateTaskStatus}
+              onDelete={setDeleteTarget}
+            />
+          ) : null}
 
           <section className="recent-tasks">
             <header className="task-section-head">
@@ -986,11 +1054,48 @@ function ScheduleView({ events, tags, onCreate }) {
   );
 }
 
+function TaskBoard({ groups, onStatus, onDelete, fixedColumns = false }) {
+  return (
+    <div className={fixedColumns ? 'task-board current-task-board' : 'task-board grouped-task-board'}>
+      {groups.map((group) => (
+        <section className="task-column" key={group.key}>
+          <header>
+            <span>{group.title}</span>
+            <em>{group.tasks.length}</em>
+          </header>
+          <div className="task-stack">
+            {group.tasks.map((task) => (
+              <TaskCard
+                key={task.task_id}
+                task={task}
+                onStatus={(nextStatus) => onStatus(task, nextStatus)}
+                onDelete={() => onDelete(task)}
+              />
+            ))}
+            {!group.tasks.length ? <p className="muted-text">暂无</p> : null}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 function TagsView({ tags, onCreate, onUpdate, onDelete }) {
   const [dialog, setDialog] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [mode, setMode] = useState('active');
+  const [activeCategory, setActiveCategory] = useState('activity_type');
   const tree = useMemo(() => buildTagTree(tags, true), [tags]);
   const parentOptions = useMemo(() => tags.filter((tag) => !tag.parent_tag_id), [tags]);
+  const activeTags = tags.filter((tag) => tag.is_active !== 0);
+  const inactiveTags = tags.filter((tag) => tag.is_active === 0);
+  const visibleTags = mode === 'active' ? activeTags : inactiveTags;
+  const visibleTree = useMemo(() => buildTagTree(visibleTags, true), [visibleTags]);
+  const visibleParents = visibleTree.byCategory[activeCategory] || [];
+  const categoryCounts = tagCategoryOptions.reduce((acc, category) => {
+    acc[category] = visibleTags.filter((tag) => tag.category === category).length;
+    return acc;
+  }, {});
 
   function editTag(tag) {
     setDialog({
@@ -1009,7 +1114,7 @@ function TagsView({ tags, onCreate, onUpdate, onDelete }) {
   }
 
   function createNew() {
-    setDialog({ mode: 'create', draft: emptyTagDraft() });
+    setDialog({ mode: 'create', draft: emptyTagDraft(activeCategory) });
   }
 
   function createChild(parent) {
@@ -1057,41 +1162,64 @@ function TagsView({ tags, onCreate, onUpdate, onDelete }) {
 
   return (
     <section className="panel tag-manager-page">
-      <SectionHeader eyebrow="受控集合" title={`所有标签 · ${tags.length} 个`} action="新增一级" onAction={createNew} />
-      <div className="tag-manager-list">
-        {orderedTagCategories(tree.byCategory).map(([category, parents]) => (
-          <section className="tag-tree-section" key={category}>
-            <h2>{tagCategoryLabels[category] || category}</h2>
-            <div className="tag-tree">
-              {parents.map((tag) => {
-                const children = tree.childrenByParent[tag.tag_id] || [];
-                return (
-                  <div className="tag-branch" key={tag.tag_id}>
-                    <TagNode
-                      tag={tag}
-                      childCount={children.length}
-                      onEdit={editTag}
-                      onToggle={toggleTag}
-                      onDelete={setDeleteTarget}
-                      onCreateChild={createChild}
-                    />
-                    {children.map((child) => (
-                      <TagNode
-                        child
-                        tag={child}
-                        onEdit={editTag}
-                        onToggle={toggleTag}
-                        onDelete={setDeleteTarget}
-                        key={child.tag_id}
-                      />
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
-          </section>
+      <SectionHeader eyebrow="互斥维度" title={`${activeTags.length} 个可用 · ${inactiveTags.length} 个停用`} action="新增一级" onAction={createNew} />
+      <div className="archive-page-tabs" aria-label="标签状态视图">
+        <button type="button" className={mode === 'active' ? 'active' : ''} onClick={() => setMode('active')}>
+          可用标签
+        </button>
+        <button type="button" className={mode === 'inactive' ? 'active' : ''} onClick={() => setMode('inactive')}>
+          停用
+        </button>
+      </div>
+      <div className="task-board-tabs tag-category-tabs" aria-label="标签分类视图">
+        {tagCategoryOptions.map((category) => (
+          <button
+            type="button"
+            className={activeCategory === category ? 'active' : ''}
+            key={category}
+            onClick={() => setActiveCategory(category)}
+          >
+            {tagCategoryLabels[category]} <span>{categoryCounts[category] || 0}</span>
+          </button>
         ))}
       </div>
+      <section className="tag-tree-section">
+        <header className="tag-category-head">
+          <div>
+            <p className="eyebrow">{mode === 'active' ? '可用标签' : '停用标签'}</p>
+            <h2>{tagCategoryLabels[activeCategory] || activeCategory}</h2>
+          </div>
+          <span>这个分类每条记录最多选一个</span>
+        </header>
+        <div className="tag-tree">
+          {visibleParents.map((tag) => {
+            const children = visibleTree.childrenByParent[tag.tag_id] || [];
+            return (
+              <div className="tag-branch" key={tag.tag_id}>
+                <TagNode
+                  tag={tag}
+                  childCount={children.length}
+                  onEdit={editTag}
+                  onToggle={toggleTag}
+                  onDelete={setDeleteTarget}
+                  onCreateChild={mode === 'active' ? createChild : null}
+                />
+                {children.map((child) => (
+                  <TagNode
+                    child
+                    tag={child}
+                    onEdit={editTag}
+                    onToggle={toggleTag}
+                    onDelete={setDeleteTarget}
+                    key={child.tag_id}
+                  />
+                ))}
+              </div>
+            );
+          })}
+          {!visibleParents.length ? <p className="muted-text">这个分类下还没有标签。</p> : null}
+        </div>
+      </section>
 
       {dialog ? (
         <TagFormModal
@@ -1184,7 +1312,11 @@ function TagFormModal({ dialog, parentOptions, tree, onClose, onSubmit }) {
           </label>
           <label>
             类别
-            <select value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })}>
+            <select
+              value={draft.category}
+              disabled={lockedParent || selectedHasChildren}
+              onChange={(event) => setDraft({ ...draft, category: event.target.value, parentTagId: '' })}
+            >
               {tagCategoryOptions.map((category) => (
                 <option value={category} key={category}>{tagCategoryLabels[category]}</option>
               ))}
@@ -1198,7 +1330,7 @@ function TagFormModal({ dialog, parentOptions, tree, onClose, onSubmit }) {
               onChange={(event) => setDraft({ ...draft, parentTagId: event.target.value })}
             >
               <option value="">一级标签</option>
-              {parentOptions.filter((tag) => tag.tag_id !== dialog.tag?.tag_id).map((tag) => (
+              {parentOptions.filter((tag) => tag.category === draft.category && tag.tag_id !== dialog.tag?.tag_id).map((tag) => (
                 <option value={tag.tag_id} key={tag.tag_id}>{tag.name} · {tagCategoryLabels[tag.category] || tag.category}</option>
               ))}
             </select>
@@ -1297,28 +1429,34 @@ function TagNode({ tag, child = false, childCount = 0, onEdit, onToggle, onDelet
   );
 }
 
-function GoalsView({ goals, tags, onCreate, onEdit }) {
-  const makeDraft = () => ({
+function GoalsView({ goals, tags, onCreate, onUpdate, onEdit }) {
+  const makeDraft = (level = 'day') => ({
     title: '',
-    level: 'month',
+    level,
     successCriteria: '',
     tagIds: tagIdsByKeys(tags, ['high_value']),
   });
   const [draft, setDraft] = useState(makeDraft);
   const [creating, setCreating] = useState(false);
   const [mode, setMode] = useState('current');
+  const [activeGoalLevel, setActiveGoalLevel] = useState('day');
   const [archiveStatus, setArchiveStatus] = useState('all');
   const [archiveQuery, setArchiveQuery] = useState('');
-  const currentGoals = goals.filter(isCurrentGoal);
-  const archivedGoals = sortGoalsByPeriod(goals.filter((goal) => !isCurrentGoal(goal)));
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const currentGoals = sortGoalsByPeriod(goals.filter(isCurrentGoal));
+  const archivedGoals = sortGoalsByPeriod(goals.filter(isArchivedGoal));
+  const activeGoals = activeGoalLevel === 'all' ? currentGoals : currentGoals.filter((goal) => goal.level === activeGoalLevel);
+  const archivedGoalsByLevel = activeGoalLevel === 'all' ? archivedGoals : archivedGoals.filter((goal) => goal.level === activeGoalLevel);
   const query = archiveQuery.trim().toLowerCase();
-  const monthCount = currentGoals.filter((goal) => goal.level === 'month').length;
-  const yearCount = currentGoals.filter((goal) => goal.level === 'year').length;
-  const archiveCounts = goalArchiveStatusOrder.reduce((acc, status) => {
-    acc[status] = archivedGoals.filter((goal) => goalArchiveStatus(goal) === status).length;
+  const activeGoalCounts = goalLevelOrder.reduce((acc, level) => {
+    acc[level] = currentGoals.filter((goal) => goal.level === level).length;
     return acc;
   }, {});
-  const filteredArchiveGoals = archivedGoals.filter((goal) => {
+  const archiveCounts = goalArchiveStatusOrder.reduce((acc, status) => {
+    acc[status] = archivedGoalsByLevel.filter((goal) => goalArchiveStatus(goal) === status).length;
+    return acc;
+  }, {});
+  const filteredArchiveGoals = archivedGoalsByLevel.filter((goal) => {
     const status = goalArchiveStatus(goal);
     const statusMatches = archiveStatus === 'all' || status === archiveStatus;
     if (!statusMatches) return false;
@@ -1332,23 +1470,42 @@ function GoalsView({ goals, tags, onCreate, onEdit }) {
     ].filter(Boolean).join(' ').toLowerCase().includes(query);
   });
 
-  function openCreate() {
-    setDraft(makeDraft());
+  function openCreate(level = 'day') {
+    setDraft(makeDraft(level));
     setCreating(true);
   }
 
   async function submit(event) {
     event.preventDefault();
-    if (!draft.title.trim()) return;
-    await onCreate(draft);
+    const title = draft.title.trim();
+    if (!title) {
+      event.currentTarget.reportValidity();
+      return;
+    }
+    await onCreate({ ...draft, title });
     setDraft(makeDraft());
     setCreating(false);
   }
 
+  async function updateGoalStatus(goal, status) {
+    await onUpdate(goal.goal_id, { status });
+  }
+
+  async function deleteGoal() {
+    if (!deleteTarget) return;
+    await onUpdate(deleteTarget.goal_id, { status: 'deleted' });
+    setDeleteTarget(null);
+  }
+
   return (
     <section className="panel goals-layout">
-      <SectionHeader eyebrow="当前聚焦" title={`${monthCount} 个月度 · ${yearCount} 个年度`} action="新建" onAction={openCreate} />
-      <div className="goal-page-tabs" aria-label="目标视图">
+      <SectionHeader
+        eyebrow="目标状态"
+        title={`${currentGoals.length} 个进行中 · ${archivedGoals.length} 个归档`}
+        action="新建"
+        onAction={() => openCreate(activeGoalLevel === 'all' ? 'day' : activeGoalLevel)}
+      />
+      <div className="archive-page-tabs" aria-label="目标状态视图">
         <button type="button" className={mode === 'current' ? 'active' : ''} onClick={() => setMode('current')}>
           当前目标
         </button>
@@ -1356,35 +1513,53 @@ function GoalsView({ goals, tags, onCreate, onEdit }) {
           归档
         </button>
       </div>
+      <div className="task-board-tabs goal-level-tabs" aria-label="目标周期视图">
+        {goalViewOrder.map((level) => (
+          <button
+            type="button"
+            className={activeGoalLevel === level ? 'active' : ''}
+            key={level}
+            onClick={() => setActiveGoalLevel(level)}
+          >
+            {goalTabLabels[level]}
+          </button>
+        ))}
+      </div>
 
       {mode === 'current' ? (
         <>
-          <div className="goal-board">
-            {currentGoals.map((goal) => (
-              <button type="button" className="goal-open" key={goal.goal_id} onClick={() => onEdit(goal)}>
-                <GoalCard goal={goal} />
-              </button>
-            ))}
-            {!currentGoals.length ? <p className="muted-text">当前周期还没有目标。</p> : null}
-          </div>
-          {archivedGoals.length ? (
-            <section className="goal-archive-preview">
-              <header className="goal-section-head">
-                <div>
-                  <p className="eyebrow">历史目标</p>
-                  <h2>已归档 {archivedGoals.length} 个目标</h2>
-                </div>
-                <button type="button" onClick={() => setMode('archive')}>查看归档</button>
-              </header>
-            </section>
-          ) : null}
+          <article className="goal-focus-card">
+            <header className="goal-focus-head">
+              <div>
+                <h2>{goalFocusTitles[activeGoalLevel]}</h2>
+              </div>
+            </header>
+
+            <div className="goal-focus-summary">
+              <span>{formatGoalLevelSummary(activeGoalLevel, activeGoalLevel === 'all' ? currentGoals.length : activeGoalCounts[activeGoalLevel])}</span>
+              <span>{archivedGoals.length} 个已归档</span>
+            </div>
+
+            <div className="goal-focus-list">
+              {activeGoals.map((goal) => (
+                <GoalFocusRow
+                  key={goal.goal_id}
+                  goal={goal}
+                  onEdit={() => onEdit(goal)}
+                  onStatus={(status) => updateGoalStatus(goal, status)}
+                  onDelete={() => setDeleteTarget(goal)}
+                />
+              ))}
+              {!activeGoals.length ? <p className="muted-text">暂无{goalTabLabels[activeGoalLevel]}。</p> : null}
+            </div>
+          </article>
         </>
       ) : (
         <section className="goal-archive-view">
           <header className="goal-archive-head">
             <div>
               <p className="eyebrow">归档</p>
-              <h2>{filteredArchiveGoals.length} 个历史目标</h2>
+              <h2>{activeGoalLevel === 'all' ? `${filteredArchiveGoals.length} 个历史目标` : `${filteredArchiveGoals.length} 个${goalTabLabels[activeGoalLevel]}归档`}</h2>
             </div>
             <input
               className="goal-archive-search"
@@ -1395,7 +1570,7 @@ function GoalsView({ goals, tags, onCreate, onEdit }) {
           </header>
           <div className="goal-archive-filters" aria-label="目标归档筛选">
             <button type="button" className={archiveStatus === 'all' ? 'active' : ''} onClick={() => setArchiveStatus('all')}>
-              全部 <span>{archivedGoals.length}</span>
+              全部 <span>{archivedGoalsByLevel.length}</span>
             </button>
             {goalArchiveStatusOrder.map((status) => (
               <button type="button" className={archiveStatus === status ? 'active' : ''} key={status} onClick={() => setArchiveStatus(status)}>
@@ -1405,9 +1580,13 @@ function GoalsView({ goals, tags, onCreate, onEdit }) {
           </div>
           <div className="goal-archive-list">
             {filteredArchiveGoals.map((goal) => (
-              <button type="button" className="goal-archive-open" key={goal.goal_id} onClick={() => onEdit(goal)}>
-                <GoalArchiveRow goal={goal} />
-              </button>
+              <GoalArchiveRow
+                key={goal.goal_id}
+                goal={goal}
+                onEdit={() => onEdit(goal)}
+                onStatus={(status) => updateGoalStatus(goal, status)}
+                onDelete={() => setDeleteTarget(goal)}
+              />
             ))}
             {!filteredArchiveGoals.length ? <p className="muted-text">没有符合条件的历史目标。</p> : null}
           </div>
@@ -1419,14 +1598,20 @@ function GoalsView({ goals, tags, onCreate, onEdit }) {
           <form className="edit-form" onSubmit={submit}>
             <label>
               标题
-              <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="例如：稳定记录 20 天" />
+              <input
+                value={draft.title}
+                onChange={(event) => setDraft({ ...draft, title: event.target.value })}
+                placeholder="例如：稳定记录 20 天"
+                required
+                autoFocus
+              />
             </label>
             <label>
               层级
               <select value={draft.level} onChange={(event) => setDraft({ ...draft, level: event.target.value })}>
-                <option value="year">年度</option>
-                <option value="month">月度</option>
-                <option value="week">周度</option>
+                {goalLevelOrder.map((level) => (
+                  <option value={level} key={level}>{levelLabels[level]}</option>
+                ))}
               </select>
             </label>
             <label>
@@ -1440,6 +1625,14 @@ function GoalsView({ goals, tags, onCreate, onEdit }) {
             </button>
           </form>
         </FormModal>
+      ) : null}
+
+      {deleteTarget ? (
+        <DeleteGoalModal
+          goal={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={deleteGoal}
+        />
       ) : null}
     </section>
   );
@@ -1456,51 +1649,374 @@ function TimelineView({ items, selectedDate, onEdit }) {
   );
 }
 
-function ReportsView({ reports, activeReport, latestReport, metrics, onGenerate }) {
+function MomentsView({ moments }) {
+  const [range, setRange] = useState('year');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+  const bounds = momentRangeBounds(range, customStart, customEnd);
+  const filteredMoments = moments
+    .filter((moment) => momentInRange(moment, bounds))
+    .sort((a, b) => new Date(b.happened_at) - new Date(a.happened_at));
+  const rangeText = formatMomentRange(range, bounds, customStart, customEnd);
+
   return (
-    <section className="view-grid reports-layout">
-      <div className="primary-column">
-        <SectionHeader eyebrow="复盘" title="AI 总结" />
+    <section className="moments-layout">
+      <section className="panel">
+        <SectionHeader eyebrow="高光画册" title={`${filteredMoments.length} 个高光 · ${rangeText}`} />
+        <div className="moment-toolbar">
+          <div className="review-filters" aria-label="高光时间筛选">
+            {momentRangeOrder.map((item) => (
+              <button type="button" className={range === item ? 'active' : ''} key={item} onClick={() => setRange(item)}>
+                {momentRangeLabels[item]}
+              </button>
+            ))}
+          </div>
+          {range === 'custom' ? (
+            <div className="moment-date-range">
+              <label>
+                起
+                <input type="date" value={customStart} onChange={(event) => setCustomStart(event.target.value)} />
+              </label>
+              <label>
+                止
+                <input type="date" value={customEnd} onChange={(event) => setCustomEnd(event.target.value)} />
+              </label>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="moment-gallery" aria-label="高光时刻画册">
+        {filteredMoments.map((moment) => (
+          <MomentCard moment={moment} key={moment.moment_id} />
+        ))}
+        {!filteredMoments.length ? <p className="muted-text">这段时间还没有高光。</p> : null}
+      </section>
+    </section>
+  );
+}
+
+function MomentCard({ moment }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const imageUrl = moment.image_url && !imageFailed ? moment.image_url : '';
+  const dateText = formatFullDate(moment.happened_at || moment.local_date);
+
+  return (
+    <article className="moment-card">
+      <div className="moment-cover">
+        {imageUrl ? (
+          <img src={imageUrl} alt={moment.title} onError={() => setImageFailed(true)} />
+        ) : (
+          <div className="moment-cover-empty">
+            <Sparkles size={20} />
+            <span>{formatDate(moment.local_date || moment.happened_at)}</span>
+          </div>
+        )}
+      </div>
+      <div className="moment-card-body">
+        <div className="moment-meta">
+          <span>{dateText}</span>
+          <span>高光 {moment.importance || 1}/5</span>
+        </div>
+        <strong title={moment.title}>{moment.title}</strong>
+        <p>{moment.story || '没有描述'}</p>
+        {moment.timeline_title ? <em>来自：{moment.timeline_title}</em> : null}
+        <TagPills tags={moment.tags} />
+      </div>
+    </article>
+  );
+}
+
+function ReportsView({ reviews, tags, activeReport, latestReport, onSelectReport, onUpdateReview }) {
+  const [reviewType, setReviewType] = useState('all');
+  const [reviewQuery, setReviewQuery] = useState('');
+  const [editingReview, setEditingReview] = useState(null);
+  const generatedReviews = reviews.filter((review) => review.source_report_id);
+  const currentRange = completedReviewRange(activeReport);
+  const currentReviews = generatedReviews
+    .filter((review) => review.review_type === activeReport && reviewOverlapsRange(review, currentRange))
+    .slice(0, 1);
+  const currentReviewIds = new Set(currentReviews.map((review) => review.review_id));
+  const query = reviewQuery.trim().toLowerCase();
+  const historyReviews = generatedReviews.filter((review) => {
+    if (currentReviewIds.has(review.review_id)) return false;
+    const typeMatches = reviewType === 'all' || review.review_type === reviewType;
+    if (!typeMatches) return false;
+    if (!query) return true;
+    return reviewMatchesQuery(review, query);
+  });
+  const reviewCounts = reviewTypeOrder.reduce((acc, type) => {
+    acc[type] = generatedReviews.filter((review) => !currentReviewIds.has(review.review_id) && review.review_type === type).length;
+    return acc;
+  }, {});
+
+  function selectReportType(period) {
+    onSelectReport(period);
+    setReviewType(period);
+  }
+
+  return (
+    <section className="reports-layout">
+      <section className="reports-generator">
+        <SectionHeader eyebrow="系统生成" title="复盘" />
         <div className="segmented">
           {['day', 'week', 'month'].map((period) => (
-            <button key={period} type="button" className={activeReport === period ? 'active' : ''} onClick={() => onGenerate(period)}>
+            <button key={period} type="button" className={activeReport === period ? 'active' : ''} onClick={() => selectReportType(period)}>
               {periodLabels[period]}
             </button>
           ))}
         </div>
         <article className="report-focus">
-          <span>{periodLabels[latestReport?.period_type] || '日报'}</span>
-          <h2>{latestReport?.title || '还没有报告'}</h2>
-          <p>{latestReport?.summary || '先从聊天框记录几条 timeline。'}</p>
+          <span>{periodLabels[activeReport]} · {reportTargetLabels[activeReport]}</span>
+          <h2>{latestReport?.title || `还没有${reportTargetLabels[activeReport]}的${periodLabels[activeReport]}`}</h2>
+          <p>{latestReport?.summary || `${reportTargetLabels[activeReport]}的${periodLabels[activeReport]}还没有生成。`}</p>
         </article>
-      </div>
+      </section>
 
-      <aside className="context-column">
-        <section className="panel">
-          <SectionHeader eyebrow="指标" title="本周期" />
-          <div className="metric-grid">
-            <Metric label="记录时长" value={`${metrics.trackedHours}h`} />
-            <Metric label="质量" value={metrics.averageQuality || '-'} />
-            <Metric label="完成任务" value={metrics.completedTasks} />
-            <Metric label="阻塞任务" value={metrics.blockedTasks} />
-            <Metric label="高光" value={metrics.moments} />
-            <Metric label="习惯" value={metrics.habitsDoneToday} />
-            <Metric label="日程" value={metrics.upcomingEvents} />
+      <section className="panel review-archive-page">
+        <header className="review-archive-head">
+          <div>
+            <p className="eyebrow">历史复盘</p>
+            <h2>{historyReviews.length} 条复盘</h2>
           </div>
-        </section>
-        <section className="panel">
-          <SectionHeader eyebrow="历史" title="最近报告" />
-          <div className="stack">
-            {reports.map((report) => (
-              <article className="mini-report" key={report.report_id}>
-                <strong>{report.title}</strong>
-                <span>{report.generated_at}</span>
-              </article>
-            ))}
-          </div>
-        </section>
-      </aside>
+          <input
+            className="review-search"
+            value={reviewQuery}
+            onChange={(event) => setReviewQuery(event.target.value)}
+            placeholder="搜索标题、正文、标签"
+          />
+        </header>
+
+        <div className="review-filters" aria-label="复盘类型筛选">
+          <button type="button" className={reviewType === 'all' ? 'active' : ''} onClick={() => setReviewType('all')}>
+            全部 <span>{generatedReviews.length - currentReviews.length}</span>
+          </button>
+          {reviewTypeOrder.map((type) => (
+            <button type="button" className={reviewType === type ? 'active' : ''} key={type} onClick={() => setReviewType(type)}>
+              {reviewTypeLabels[type]} <span>{reviewCounts[type] || 0}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="review-list">
+          {historyReviews.map((review) => (
+            <ReviewCard key={review.review_id} review={review} onEdit={() => setEditingReview(review)} />
+          ))}
+          {!historyReviews.length ? <p className="muted-text">还没有历史复盘。</p> : null}
+        </div>
+      </section>
+
+      {editingReview ? (
+        <ReviewFormModal
+          draft={makeReviewEditDraft(editingReview)}
+          tags={tags}
+          onClose={() => setEditingReview(null)}
+          onSubmit={async (payload) => {
+            await onUpdateReview(editingReview.review_id, payload);
+            setEditingReview(null);
+          }}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function reviewMatchesQuery(review, query) {
+  return [
+    review.title,
+    review.summary,
+    review.body,
+    review.learnings,
+    review.next_actions,
+    reviewTypeLabels[review.review_type],
+    ...(review.tags || []),
+  ].filter(Boolean).join(' ').toLowerCase().includes(query);
+}
+
+function momentRangeBounds(range, customStart, customEnd) {
+  const date = new Date();
+  if (range === 'all') return null;
+  if (range === 'custom') {
+    if (!customStart && !customEnd) return null;
+    return {
+      start: customStart || '0000-01-01',
+      end: customEnd || '9999-12-31',
+    };
+  }
+  if (range === 'year') {
+    return {
+      start: localDateKey(new Date(date.getFullYear(), 0, 1)),
+      end: localDateKey(new Date(date.getFullYear(), 11, 31)),
+    };
+  }
+  if (range === 'week') {
+    const start = startOfWeek(date);
+    const end = endOfWeek(date);
+    return { start: localDateKey(start), end: localDateKey(end) };
+  }
+  return {
+    start: localDateKey(new Date(date.getFullYear(), date.getMonth(), 1)),
+    end: localDateKey(new Date(date.getFullYear(), date.getMonth() + 1, 0)),
+  };
+}
+
+function momentInRange(moment, bounds) {
+  if (!bounds) return true;
+  const key = dateKey(moment.local_date || moment.happened_at);
+  return key >= bounds.start && key <= bounds.end;
+}
+
+function formatMomentRange(range, bounds, customStart, customEnd) {
+  if (range === 'all') return '全部时间';
+  if (range === 'custom') {
+    if (customStart && customEnd) return formatReviewRange(bounds);
+    if (customStart) return `${formatDateKey(customStart)} 后`;
+    if (customEnd) return `${formatDateKey(customEnd)} 前`;
+    return '自定义区间';
+  }
+  return formatReviewRange(bounds);
+}
+
+function completedReviewRange(type) {
+  const date = new Date();
+  if (type === 'month') {
+    const lastMonth = new Date(date.getFullYear(), date.getMonth() - 1, 1);
+    return {
+      start: localDateKey(lastMonth),
+      end: localDateKey(new Date(lastMonth.getFullYear(), lastMonth.getMonth() + 1, 0)),
+    };
+  }
+  if (type === 'week') {
+    const currentWeekStart = startOfWeek(date);
+    const start = new Date(currentWeekStart);
+    start.setDate(currentWeekStart.getDate() - 7);
+    const end = new Date(currentWeekStart);
+    end.setDate(currentWeekStart.getDate() - 1);
+    return { start: localDateKey(start), end: localDateKey(end) };
+  }
+  const yesterday = new Date(date);
+  yesterday.setDate(date.getDate() - 1);
+  return { start: localDateKey(yesterday), end: localDateKey(yesterday) };
+}
+
+function reviewOverlapsRange(review, range) {
+  const start = dateKey(review.period_start || review.created_at);
+  const end = dateKey(review.period_end || review.created_at);
+  return Boolean(start && end && start <= range.end && end >= range.start);
+}
+
+function dateKey(value) {
+  if (!value) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  return localDateKey(new Date(value));
+}
+
+function formatReviewRange(range) {
+  if (range.start === range.end) return formatDateKey(range.start);
+  return `${formatDateKey(range.start)} - ${formatDateKey(range.end)}`;
+}
+
+function formatDateKey(value) {
+  return formatDate(dateFromKey(value));
+}
+
+function makeReviewEditDraft(review) {
+  return {
+    title: review.title || '',
+    reviewType: review.review_type || 'topic',
+    periodStart: review.period_start || '',
+    periodEnd: review.period_end || '',
+    summary: review.summary || '',
+    body: review.body || '',
+    learnings: review.learnings || '',
+    nextActions: review.next_actions || '',
+    sourceReportId: review.source_report_id || null,
+    tagIds: review.tagIds || [],
+  };
+}
+
+function ReviewFormModal({ draft, tags, onClose, onSubmit }) {
+  const [form, setForm] = useState(draft);
+
+  async function submit(event) {
+    event.preventDefault();
+    if (!form.title.trim()) return;
+    await onSubmit(form);
+  }
+
+  return (
+    <FormModal eyebrow="编辑" title="编辑系统复盘" onClose={onClose}>
+      <form className="edit-form" onSubmit={submit}>
+        <label>
+          标题
+          <input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} />
+        </label>
+        <label>
+          类型
+          <select value={form.reviewType} onChange={(event) => setForm({ ...form, reviewType: event.target.value })}>
+            {reviewTypeOrder.map((type) => (
+              <option value={type} key={type}>{reviewTypeLabels[type]}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          系统概览
+          <textarea value={form.summary} onChange={(event) => setForm({ ...form, summary: event.target.value })} />
+        </label>
+        <label>
+          事实记录
+          <textarea value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} />
+        </label>
+        <label>
+          判断与洞察
+          <textarea value={form.learnings} onChange={(event) => setForm({ ...form, learnings: event.target.value })} placeholder="可选，写你的感受、判断、取舍或经验" />
+        </label>
+        <label>
+          调整与下一步
+          <textarea value={form.nextActions} onChange={(event) => setForm({ ...form, nextActions: event.target.value })} placeholder="可选，写后续动作或生活系统调整" />
+        </label>
+        <TagPicker tags={tags} selected={form.tagIds} onChange={(tagIds) => setForm({ ...form, tagIds })} />
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+          <button className="primary-button" type="submit">
+            <Check size={16} />
+            <span>保存修改</span>
+          </button>
+        </div>
+      </form>
+    </FormModal>
+  );
+}
+
+function ReviewCard({ review, onEdit }) {
+  return (
+    <article className="review-card">
+      <div className="review-card-head">
+        <div>
+          <span>{reviewTypeLabels[review.review_type] || review.review_type}</span>
+          <em>{formatDate(review.created_at)}</em>
+        </div>
+        <button type="button" className="review-edit-button" onClick={onEdit}>
+          <Edit3 size={14} />
+          <span>编辑</span>
+        </button>
+      </div>
+      <strong title={review.title}>{review.title}</strong>
+      <p>{review.summary || review.body || '没有摘要'}</p>
+      {review.learnings ? (
+        <div className="review-note">
+          <span>判断</span>
+          <p>{review.learnings}</p>
+        </div>
+      ) : null}
+      {review.next_actions ? (
+        <div className="review-note">
+          <span>调整</span>
+          <p>{review.next_actions}</p>
+        </div>
+      ) : null}
+      <TagPills tags={review.tags} />
+    </article>
   );
 }
 
@@ -1568,6 +2084,137 @@ function TaskArchiveRow({ task, onStatus, onDelete }) {
   );
 }
 
+function PeopleRelationsView({ people }) {
+  const [selectedPersonId, setSelectedPersonId] = useState(people[0]?.person_id || '');
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const peopleWithCounts = useMemo(() => people.map((person) => ({
+    person,
+    relatedCount: buildPersonRelatedItems(person).length,
+  })), [people]);
+
+  useEffect(() => {
+    if (people.some((person) => person.person_id === selectedPersonId)) return;
+    setSelectedPersonId(people[0]?.person_id || '');
+  }, [people, selectedPersonId]);
+
+  const selectedPerson = people.find((person) => person.person_id === selectedPersonId) || people[0] || null;
+  const relatedItems = useMemo(
+    () => (selectedPerson ? buildPersonRelatedItems(selectedPerson) : []),
+    [selectedPerson],
+  );
+  const filteredItems = sourceFilter === 'all'
+    ? relatedItems
+    : relatedItems.filter((item) => item.source === sourceFilter);
+  const sourceCounts = peopleRelationSources.reduce((acc, source) => {
+    acc[source.id] = source.id === 'all'
+      ? relatedItems.length
+      : relatedItems.filter((item) => item.source === source.id).length;
+    return acc;
+  }, {});
+
+  return (
+    <section className="panel people-relations-page">
+      <SectionHeader
+        eyebrow="人物关系"
+        title={`${people.length} 个人 · ${relatedItems.length} 件相关的事`}
+      />
+
+      {!people.length ? (
+        <p className="empty-state">还没有人物。后续记录里出现的人，可以归一到人物和别名。</p>
+      ) : (
+        <div className="people-relation-layout">
+          <div className="person-list" aria-label="人物列表">
+            {peopleWithCounts.map(({ person, relatedCount }) => {
+              const aliases = personAliases(person);
+              const active = person.person_id === selectedPerson?.person_id;
+              return (
+                <button
+                  type="button"
+                  className={active ? 'person-card active' : 'person-card'}
+                  onClick={() => {
+                    setSelectedPersonId(person.person_id);
+                    setSourceFilter('all');
+                  }}
+                  key={person.person_id}
+                >
+                  <span className="person-card-main">
+                    <strong>{person.display_name}</strong>
+                    <em>{personRoleLabel(person)}</em>
+                  </span>
+                  {person.note ? <span className="person-note">{person.note}</span> : null}
+                  <span className="person-aliases">
+                    {aliases.slice(0, 4).map((alias) => <i key={alias}>{alias}</i>)}
+                  </span>
+                  <span className="person-related-count">{relatedCount} 件相关</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {selectedPerson ? (
+            <section className="person-detail-panel">
+              <header className="person-detail-head">
+                <div>
+                  <p className="eyebrow">{personRoleLabel(selectedPerson)}</p>
+                  <h2>{selectedPerson.display_name}</h2>
+                  {selectedPerson.note ? <p>{selectedPerson.note}</p> : null}
+                </div>
+                <span>{relatedItems.length}</span>
+              </header>
+
+              <div className="person-detail-block">
+                <p className="eyebrow">别名</p>
+                <div className="person-aliases large">
+                  {personAliases(selectedPerson).map((alias) => <i key={alias}>{alias}</i>)}
+                </div>
+              </div>
+
+              <div className="task-board-tabs compact" aria-label="相关事项来源">
+                {peopleRelationSources.map((source) => (
+                  <button
+                    type="button"
+                    className={sourceFilter === source.id ? 'active' : ''}
+                    onClick={() => setSourceFilter(source.id)}
+                    key={source.id}
+                  >
+                    {source.label} <span>{sourceCounts[source.id] || 0}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="person-related-list">
+                {filteredItems.map((item) => <PersonRelatedItem item={item} key={item.id} />)}
+                {!filteredItems.length ? <p className="muted-text">这个范围还没有相关事项。</p> : null}
+              </div>
+            </section>
+          ) : null}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PersonRelatedItem({ item }) {
+  const relationMeta = [
+    personLinkRoleLabels[item.relationRole] || item.relationRole,
+    item.relationMention ? `称呼：${item.relationMention}` : '',
+    item.relationNote,
+  ].filter(Boolean).join(' · ');
+
+  return (
+    <article className={`person-related-item ${item.source}`}>
+      <div className="person-related-meta">
+        <span>{item.sourceLabel}</span>
+        <time>{formatFullDate(item.date) || '未记录日期'}</time>
+      </div>
+      <strong title={item.title}>{item.title}</strong>
+      {item.body ? <p>{item.body}</p> : null}
+      {relationMeta ? <em>{relationMeta}</em> : null}
+      {item.meta ? <em>{item.meta}</em> : null}
+    </article>
+  );
+}
+
 function DeleteTaskModal({ task, onClose, onConfirm }) {
   return (
     <div className="modal-backdrop">
@@ -1596,7 +2243,7 @@ function DeleteTaskModal({ task, onClose, onConfirm }) {
   );
 }
 
-function TaskStatusMenu({ value, onChange, label, statuses = taskWorkflowStatusOrder }) {
+function TaskStatusMenu({ value, onChange, label, statuses = taskWorkflowStatusOrder, labels = taskStatusLabels }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef(null);
 
@@ -1628,7 +2275,7 @@ function TaskStatusMenu({ value, onChange, label, statuses = taskWorkflowStatusO
         aria-expanded={open}
         aria-label={label}
       >
-        <span>{taskStatusLabels[value] || value}</span>
+        <span>{labels[value] || value}</span>
         <ChevronDown size={13} />
       </button>
       {open ? (
@@ -1645,7 +2292,7 @@ function TaskStatusMenu({ value, onChange, label, statuses = taskWorkflowStatusO
                 onClick={() => choose(status)}
               >
                 <span className="task-status-check">{selected ? <Check size={14} /> : null}</span>
-                <span>{taskStatusLabels[status]}</span>
+                <span>{labels[status] || status}</span>
               </button>
             );
           })}
@@ -1655,7 +2302,7 @@ function TaskStatusMenu({ value, onChange, label, statuses = taskWorkflowStatusO
   );
 }
 
-function HabitRow({ habit, onLog, readonly = false }) {
+function HabitRow({ habit, onLog, onArchive, readonly = false }) {
   const doneToday = habit.todayLog?.status === 'done';
   return (
     <article className={doneToday ? 'habit-row done' : 'habit-row'}>
@@ -1672,12 +2319,122 @@ function HabitRow({ habit, onLog, readonly = false }) {
       <div className="habit-main">
         <div className="row-title">
           <strong title={habit.title}>{habit.title}</strong>
-          <span className="habit-count">{cadenceLabels[habit.cadence] || habit.cadence} · {habit.weekCount}/{habit.target_count}</span>
+          <div className="habit-row-meta">
+            <span className="habit-count">今天 · {doneToday ? 1 : 0}/1</span>
+            {onArchive ? (
+              <button type="button" className="habit-archive-button" onClick={onArchive}>
+                移入归档
+              </button>
+            ) : null}
+          </div>
         </div>
         <p title={habit.note}>{habit.note}</p>
         <TagPills tags={habit.tags} quality={habit.todayLog?.quality} />
       </div>
     </article>
+  );
+}
+
+function HabitArchiveRow({ habit, onRestore, onDelete }) {
+  return (
+    <article className="habit-archive-row">
+      <div className="habit-archive-main">
+        <div className="habit-archive-title">
+          <span>每天一次</span>
+          <strong title={habit.title}>{habit.title}</strong>
+        </div>
+        <p title={habit.note || '没有备注'}>{habit.note || '没有备注'}</p>
+        <div className="task-meta">
+          <span>每天一次</span>
+          <span>{formatDate(habit.created_at)} 创建</span>
+        </div>
+        <TagPills tags={habit.tags} quality={habit.todayLog?.quality} />
+      </div>
+      <div className="habit-archive-actions">
+        <button type="button" className="habit-restore-button" onClick={onRestore}>恢复</button>
+        <button type="button" className="task-delete-trigger" onClick={onDelete} title="删除习惯" aria-label={`删除 ${habit.title}`}>
+          <Trash2 size={13} />
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function HabitHeatmap({ habits, logs }) {
+  const activeHabitIds = useMemo(() => new Set(habits.map((habit) => habit.habit_id)), [habits]);
+  const activeLogs = useMemo(() => logs.filter((log) => activeHabitIds.has(log.habit_id)), [logs, activeHabitIds]);
+  const years = useMemo(() => habitHeatmapYears(activeLogs), [activeLogs]);
+  const [year, setYear] = useState(() => years[0] || new Date().getFullYear());
+  const cells = useMemo(() => buildHabitYearHeatmapCells(activeLogs, year), [activeLogs, year]);
+  const weeks = useMemo(() => chunk(cells, 7), [cells]);
+  const monthLabels = useMemo(() => habitHeatmapMonthLabels(weeks), [weeks]);
+  const totalDone = cells.reduce((sum, cell) => sum + cell.count, 0);
+  const activeCells = cells.filter((cell) => cell.count > 0).length;
+  const selectedYearIndex = years.indexOf(year);
+  const olderYear = selectedYearIndex >= 0 ? years[selectedYearIndex + 1] : null;
+  const newerYear = selectedYearIndex > 0 ? years[selectedYearIndex - 1] : null;
+
+  useEffect(() => {
+    if (!years.includes(year)) setYear(years[0]);
+  }, [years, year]);
+
+  return (
+    <section className="habit-heatmap">
+      <header className="habit-heatmap-head">
+        <div>
+          <p className="eyebrow">习惯热力</p>
+          <h2>{year} 年 · {totalDone} 次完成 · {activeCells} 天有记录</h2>
+        </div>
+        <div className="habit-year-picker">
+          <span>年份</span>
+          <div className="habit-year-switcher" aria-label="选择热力图年份">
+            <button type="button" onClick={() => setYear(olderYear)} disabled={!olderYear} aria-label="上一年">
+              <ChevronLeft size={15} />
+            </button>
+            <strong>{year}</strong>
+            <button type="button" onClick={() => setYear(newerYear)} disabled={!newerYear} aria-label="下一年">
+              <ChevronRight size={15} />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="habit-year-heatmap">
+        <div className="habit-year-months" style={{ '--habit-week-count': weeks.length }} aria-hidden="true">
+          {monthLabels.map((label) => (
+            <span style={{ gridColumn: `${label.week + 1} / span ${label.span}` }} key={label.key}>{label.text}</span>
+          ))}
+        </div>
+        <div className="habit-year-body">
+          <div className="habit-year-weekdays" aria-hidden="true">
+            {['', '一', '', '三', '', '五', ''].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}
+          </div>
+          <div className="habit-year-weeks" style={{ '--habit-week-count': weeks.length }}>
+            {weeks.map((week) => (
+              <div className="habit-year-week" key={week[0]?.key}>
+                {week.map((cell) => <HabitHeatmapCell cell={cell} key={cell.key} />)}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <footer className="habit-heatmap-legend">
+        <span>少</span>
+        {[0, 1, 2, 3, 4].map((level) => <i className={`level-${level}`} key={level} />)}
+        <span>多</span>
+      </footer>
+    </section>
+  );
+}
+
+function HabitHeatmapCell({ cell }) {
+  return (
+    <span
+      className={`habit-heatmap-cell level-${cell.level}${cell.inYear ? '' : ' outside-year'}`}
+      title={`${cell.label} · ${cell.count} 次完成`}
+      aria-label={`${cell.label} ${cell.count} 次完成`}
+    />
   );
 }
 
@@ -1754,12 +2511,13 @@ function DayTimeline({ items, selectedDate, onEdit, full = false }) {
   );
 }
 
-function GoalCard({ goal, compact = false }) {
+function GoalCard({ goal, onEdit, onStatus, onDelete, compact = false }) {
   return (
     <article className={compact ? 'goal-card compact' : 'goal-card'}>
       <div className="goal-topline">
         <span>{levelLabels[goal.level] || goal.level}</span>
         <em>{formatGoalPeriod(goal)}</em>
+        <GoalActions goal={goal} onEdit={onEdit} onStatus={onStatus} onDelete={onDelete} />
       </div>
       <strong title={goal.title}>{goal.title}</strong>
       <p title={goal.success_criteria || '还没有成功标准'}>{goal.success_criteria || '还没有成功标准'}</p>
@@ -1771,7 +2529,26 @@ function GoalCard({ goal, compact = false }) {
   );
 }
 
-function GoalArchiveRow({ goal }) {
+function GoalFocusRow({ goal, onEdit, onStatus, onDelete }) {
+  return (
+    <article className="goal-focus-row">
+      <div className="goal-focus-row-main">
+        <div className="goal-focus-row-title">
+          <strong title={goal.title}>{goal.title}</strong>
+          <span>{formatGoalPeriod(goal)}</span>
+        </div>
+        <p title={goal.success_criteria || '还没有成功标准'}>{goal.success_criteria || '还没有成功标准'}</p>
+        <TagPills tags={goal.tags} />
+      </div>
+      <div className="progress-track">
+        <i style={{ width: `${goal.progress || 12}%` }} />
+      </div>
+      <GoalActions goal={goal} onEdit={onEdit} onStatus={onStatus} onDelete={onDelete} />
+    </article>
+  );
+}
+
+function GoalArchiveRow({ goal, onEdit, onStatus, onDelete }) {
   const archiveStatus = goalArchiveStatus(goal);
   return (
     <article className={`goal-archive-row ${archiveStatus}`}>
@@ -1790,7 +2567,63 @@ function GoalArchiveRow({ goal }) {
       <div className="progress-track">
         <i style={{ width: `${goal.progress || 12}%` }} />
       </div>
+      <GoalActions goal={goal} onEdit={onEdit} onStatus={onStatus} onDelete={onDelete} />
     </article>
+  );
+}
+
+function GoalActions({ goal, onEdit, onStatus, onDelete }) {
+  if (!onStatus && !onEdit && !onDelete) return null;
+  return (
+    <div className="goal-actions">
+      {onStatus ? (
+        <TaskStatusMenu
+          value={goal.status}
+          onChange={onStatus}
+          label={`更新 ${goal.title} 状态`}
+          statuses={goalWorkflowStatusOrder}
+          labels={statusLabels}
+        />
+      ) : null}
+      {onEdit ? (
+        <button type="button" className="goal-icon-button" onClick={onEdit} title="编辑目标" aria-label={`编辑 ${goal.title}`}>
+          <Edit3 size={13} />
+        </button>
+      ) : null}
+      {onDelete ? (
+        <button type="button" className="goal-delete-trigger" onClick={onDelete} title="删除目标" aria-label={`删除 ${goal.title}`}>
+          <Trash2 size={13} />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function DeleteGoalModal({ goal, onClose, onConfirm }) {
+  return (
+    <div className="modal-backdrop">
+      <section className="modal-panel confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-goal-title">
+        <header className="modal-header">
+          <div>
+            <p className="eyebrow">二次确认</p>
+            <h2 id="delete-goal-title">删除「{goal.title}」？</h2>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} title="关闭">
+            <X size={18} />
+          </button>
+        </header>
+        <p className="confirm-copy">
+          删除后目标会从当前目标和归档中隐藏。
+        </p>
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+          <button type="button" className="danger-button" onClick={onConfirm}>
+            <Trash2 size={16} />
+            <span>删除目标</span>
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1849,18 +2682,17 @@ function EditorDrawer({ editor, tags, tasks = [], onClose, onSave }) {
               <label>
                 层级
                 <select value={draft.level} onChange={(event) => setDraft({ ...draft, level: event.target.value })}>
-                  <option value="year">年度</option>
-                  <option value="month">月度</option>
-                  <option value="week">周度</option>
+                  {goalLevelOrder.map((level) => (
+                    <option value={level} key={level}>{levelLabels[level]}</option>
+                  ))}
                 </select>
               </label>
               <label>
                 状态
                 <select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value })}>
-                  <option value="active">进行中</option>
-                  <option value="paused">暂停</option>
-                  <option value="done">完成</option>
-                  <option value="abandoned">放弃</option>
+                  {goalWorkflowStatusOrder.map((status) => (
+                    <option value={status} key={status}>{statusLabels[status]}</option>
+                  ))}
                 </select>
               </label>
               <label>
@@ -1911,50 +2743,46 @@ function EditorDrawer({ editor, tags, tasks = [], onClose, onSave }) {
 
 function TagPicker({ tags, selected, onChange }) {
   const tree = useMemo(() => buildTagTree(tags), [tags]);
-  const [expandedParentId, setExpandedParentId] = useState('');
-  const selectedChildParentKey = useMemo(() => {
-    const selectedSet = new Set(selected);
-    return Object.entries(tree.childrenByParent).find(([, children]) => (
-      children.some((child) => selectedSet.has(child.tag_id))
-    ))?.[0] || '';
-  }, [selected, tree]);
+  const tagById = useMemo(() => new Map(tags.map((tag) => [tag.tag_id, tag])), [tags]);
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const selectedByCategory = useMemo(() => selected.reduce((acc, tagId) => {
+    const tag = tagById.get(tagId);
+    if (tag) acc[tag.category] = tagId;
+    return acc;
+  }, {}), [selected, tagById]);
+  const [expandedByCategory, setExpandedByCategory] = useState({});
 
   useEffect(() => {
-    if (selectedChildParentKey) setExpandedParentId(selectedChildParentKey);
-  }, [selectedChildParentKey]);
+    const nextExpanded = {};
+    selected.forEach((tagId) => {
+      const tag = tagById.get(tagId);
+      if (tag?.parent_tag_id) nextExpanded[tag.category] = tag.parent_tag_id;
+      else if (tag && (tree.childrenByParent[tag.tag_id] || []).length) nextExpanded[tag.category] = tag.tag_id;
+    });
+    setExpandedByCategory((current) => ({ ...current, ...nextExpanded }));
+  }, [selected, tagById, tree]);
 
-  function toggleParent(tag) {
-    const children = tree.childrenByParent[tag.tag_id] || [];
-    const childIds = children.map((child) => child.tag_id);
-    if (selected.includes(tag.tag_id)) {
-      onChange(selected.filter((tagId) => tagId !== tag.tag_id && !childIds.includes(tagId)));
-      if (expandedParentId === tag.tag_id) setExpandedParentId('');
-    } else {
-      onChange([...selected, tag.tag_id]);
-      if (children.length) setExpandedParentId(tag.tag_id);
-    }
+  function chooseTag(tag) {
+    const sameCategoryIds = tags.filter((item) => item.category === tag.category).map((item) => item.tag_id);
+    const next = selected.filter((tagId) => !sameCategoryIds.includes(tagId));
+    if (!selectedSet.has(tag.tag_id)) next.push(tag.tag_id);
+    onChange(next);
   }
 
-  function toggleChild(parent, child) {
-    if (selected.includes(child.tag_id)) {
-      onChange(selected.filter((tagId) => tagId !== child.tag_id));
-    } else {
-      onChange([...new Set([...selected, parent.tag_id, child.tag_id])]);
-    }
-  }
-
-  function isParentSelected(parent) {
-    const childIds = (tree.childrenByParent[parent.tag_id] || []).map((child) => child.tag_id);
-    return selected.includes(parent.tag_id) || childIds.some((tagId) => selected.includes(tagId));
+  function clearCategory(category) {
+    const sameCategoryIds = tags.filter((tag) => tag.category === category).map((tag) => tag.tag_id);
+    onChange(selected.filter((tagId) => !sameCategoryIds.includes(tagId)));
   }
 
   return (
     <fieldset className="tag-picker">
       <legend>标签</legend>
       {orderedTagCategories(tree.byCategory).map(([category, parents]) => {
+        const selectedTag = tagById.get(selectedByCategory[category]);
+        const selectedParentId = selectedTag?.parent_tag_id || selectedTag?.tag_id || '';
+        const expandedId = expandedByCategory[category] || selectedParentId;
         const expandedParent = parents.find((tag) => (
-          expandedParentId === tag.tag_id
-          && isParentSelected(tag)
+          expandedId === tag.tag_id
           && (tree.childrenByParent[tag.tag_id] || []).length > 0
         ));
         const expandedChildren = expandedParent ? tree.childrenByParent[expandedParent.tag_id] || [] : [];
@@ -1962,7 +2790,12 @@ function TagPicker({ tags, selected, onChange }) {
 
         return (
           <div className="tag-group" key={category}>
-            <span className="tag-group-label">{tagCategoryLabels[category] || category}</span>
+            <div className="tag-group-label">
+              <span>{tagCategoryLabels[category] || category}</span>
+              {selectedByCategory[category] ? (
+                <button type="button" onClick={() => clearCategory(category)}>清空</button>
+              ) : null}
+            </div>
             <div className="tag-parent-list">
               {parents.map((tag) => {
                 const children = tree.childrenByParent[tag.tag_id] || [];
@@ -1972,7 +2805,12 @@ function TagPicker({ tags, selected, onChange }) {
                     <button
                       type="button"
                       className={selected.includes(tag.tag_id) ? 'tag-chip selected' : 'tag-chip'}
-                      onClick={() => toggleParent(tag)}
+                      onClick={() => {
+                        chooseTag(tag);
+                        if (children.length) {
+                          setExpandedByCategory((current) => ({ ...current, [category]: tag.tag_id }));
+                        }
+                      }}
                       aria-expanded={children.length ? open : undefined}
                       aria-controls={children.length ? childListId : undefined}
                     >
@@ -1989,7 +2827,7 @@ function TagPicker({ tags, selected, onChange }) {
                     type="button"
                     className={selected.includes(child.tag_id) ? 'tag-chip child selected' : 'tag-chip child'}
                     key={child.tag_id}
-                    onClick={() => toggleChild(expandedParent, child)}
+                    onClick={() => chooseTag(child)}
                   >
                     {child.name}
                   </button>
@@ -2016,15 +2854,6 @@ function SectionHeader({ eyebrow, title, action, onAction }) {
         </button>
       ) : null}
     </header>
-  );
-}
-
-function Metric({ label, value }) {
-  return (
-    <div className="metric-card">
-      <strong>{value}</strong>
-      <span>{label}</span>
-    </div>
   );
 }
 
@@ -2077,11 +2906,11 @@ function orderedTagCategories(byCategory) {
   ));
 }
 
-function emptyTagDraft() {
+function emptyTagDraft(category = 'activity_type') {
   return {
     name: '',
     tagKey: '',
-    category: 'activity_type',
+    category,
     parentTagId: '',
     description: '',
     sortOrder: 100,
@@ -2213,6 +3042,86 @@ function startOfWeek(value) {
   return date;
 }
 
+function endOfWeek(value) {
+  const date = startOfWeek(value);
+  date.setDate(date.getDate() + 6);
+  date.setHours(23, 59, 59, 999);
+  return date;
+}
+
+function habitHeatmapYears(logs) {
+  const years = new Set([new Date().getFullYear()]);
+  logs.forEach((log) => {
+    if (!log.local_date) return;
+    const year = dateFromKey(log.local_date).getFullYear();
+    if (!Number.isNaN(year)) years.add(year);
+  });
+  return [...years].sort((a, b) => b - a);
+}
+
+function buildHabitYearHeatmapCells(logs, year) {
+  const selectedYear = Number(year) || new Date().getFullYear();
+  const countByDate = logs.reduce((acc, log) => {
+    if (log.status !== 'done') return acc;
+    acc[log.local_date] = (acc[log.local_date] || 0) + 1;
+    return acc;
+  }, {});
+  const start = startOfWeek(new Date(selectedYear, 0, 1));
+  const end = endOfWeek(new Date(selectedYear, 11, 31));
+  const cells = [];
+
+  for (const date = new Date(start); date <= end; date.setDate(date.getDate() + 1)) {
+    const cellDate = new Date(date);
+    const key = localDateKey(cellDate);
+    const inYear = cellDate.getFullYear() === selectedYear;
+    cells.push({
+      key,
+      date: cellDate,
+      inYear,
+      label: formatFullDate(cellDate),
+      count: inYear ? countByDate[key] || 0 : 0,
+    });
+  }
+
+  const maxCount = Math.max(1, ...cells.filter((cell) => cell.inYear).map((cell) => cell.count));
+  return cells.map((cell) => ({
+    ...cell,
+    level: cell.inYear ? habitHeatmapLevel(cell.count, maxCount) : 0,
+  }));
+}
+
+function habitHeatmapMonthLabels(weeks) {
+  const labels = [];
+  const seen = new Set();
+  weeks.forEach((week, weekIndex) => {
+    const monthStart = week.find((cell) => cell.inYear && cell.date.getDate() <= 7);
+    if (!monthStart) return;
+    const key = `${monthStart.date.getFullYear()}-${monthStart.date.getMonth()}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    labels.push({
+      key,
+      week: weekIndex,
+      span: 4,
+      text: `${monthStart.date.getMonth() + 1}月`,
+    });
+  });
+  return labels;
+}
+
+function habitHeatmapLevel(count, maxCount) {
+  if (!count) return 0;
+  return Math.max(1, Math.ceil((count / maxCount) * 4));
+}
+
+function chunk(items, size) {
+  const groups = [];
+  for (let index = 0; index < items.length; index += size) {
+    groups.push(items.slice(index, index + size));
+  }
+  return groups;
+}
+
 function taskArchiveTime(task) {
   return task.completed_at || task.status_updated_at || task.created_at;
 }
@@ -2221,18 +3130,118 @@ function sortTasksByArchiveDate(tasks) {
   return [...tasks].sort((a, b) => new Date(taskArchiveTime(b)) - new Date(taskArchiveTime(a)));
 }
 
+function sortTasksByDueDate(tasks) {
+  return [...tasks].sort((a, b) => (
+    taskDueTime(a) - taskDueTime(b)
+    || Number(a.priority || 99) - Number(b.priority || 99)
+    || new Date(a.created_at) - new Date(b.created_at)
+  ));
+}
+
+function taskDueTime(task) {
+  return task.due_at ? new Date(task.due_at).getTime() : Number.MAX_SAFE_INTEGER;
+}
+
+function buildTaskDueGroups(tasks) {
+  const groups = [
+    { key: 'overdue', title: '逾期', tasks: [] },
+    { key: 'today', title: '今天', tasks: [] },
+    { key: 'week', title: '本周', tasks: [] },
+    { key: 'later', title: '以后', tasks: [] },
+    { key: 'none', title: '无截止', tasks: [] },
+  ];
+  const byKey = new Map(groups.map((group) => [group.key, group]));
+  const todayKey = localDateKey(new Date());
+  const weekEnd = endOfWeek(new Date());
+
+  tasks.forEach((task) => {
+    if (!task.due_at) {
+      byKey.get('none').tasks.push(task);
+      return;
+    }
+
+    const dueDate = new Date(task.due_at);
+    const dueKey = localDateKey(dueDate);
+    if (dueKey < todayKey) byKey.get('overdue').tasks.push(task);
+    else if (dueKey === todayKey) byKey.get('today').tasks.push(task);
+    else if (dueDate <= weekEnd) byKey.get('week').tasks.push(task);
+    else byKey.get('later').tasks.push(task);
+  });
+
+  groups.forEach((group) => {
+    group.tasks = sortTasksByDueDate(group.tasks);
+  });
+  return groups;
+}
+
+function buildTaskGoalGroups(tasks) {
+  const byGoal = new Map();
+  tasks.forEach((task) => {
+    const key = task.goal_id || 'none';
+    if (!byGoal.has(key)) {
+      byGoal.set(key, {
+        key,
+        title: task.goal_title || '未关联目标',
+        tasks: [],
+      });
+    }
+    byGoal.get(key).tasks.push(task);
+  });
+
+  if (!byGoal.size) return [{ key: 'none', title: '未关联目标', tasks: [] }];
+
+  return [...byGoal.values()]
+    .map((group) => ({ ...group, tasks: sortTasksByDueDate(group.tasks) }))
+    .sort((a, b) => (
+      (a.key === 'none') - (b.key === 'none')
+      || a.title.localeCompare(b.title, 'zh-CN')
+    ));
+}
+
+function personAliases(person) {
+  return [...new Set([person.display_name, ...(person.aliases || [])]
+    .map((alias) => String(alias || '').trim())
+    .filter(Boolean))];
+}
+
+function personRoleLabel(person) {
+  return person.role || personRelationshipLabels[person.relationship_type] || person.relationship_type || '人物';
+}
+
+function buildPersonRelatedItems(person) {
+  return [...(person.relatedRecords || [])]
+    .filter((item) => item.title)
+    .sort((a, b) => relationDateValue(b.date) - relationDateValue(a.date));
+}
+
+function relationDateValue(value) {
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date.getTime() : 0;
+}
+
 function isCurrentGoal(goal) {
-  return ['active', 'paused'].includes(goal.status) && !isPastDate(goal.period_end);
+  return goal.status === 'active' && !isPastDate(goal.period_end);
+}
+
+function isArchivedGoal(goal) {
+  return goalArchiveStatusOrder.includes(goalArchiveStatus(goal));
 }
 
 function goalArchiveStatus(goal) {
   if (goal.status === 'done') return 'done';
+  if (goal.status === 'not_done') return 'not_done';
   if (goal.status === 'abandoned') return 'abandoned';
-  return 'expired';
+  if (goal.status === 'active' && isPastDate(goal.period_end)) return 'not_done';
+  return '';
 }
 
 function sortGoalsByPeriod(goals) {
   return [...goals].sort((a, b) => new Date(b.period_end || b.created_at) - new Date(a.period_end || a.created_at));
+}
+
+function formatGoalLevelSummary(level, count) {
+  const names = { all: '当前', day: '今天', week: '本周', month: '本月', year: '今年' };
+  return `${names[level] || '当前周期'} ${count} 个进行中`;
 }
 
 function isPastDate(value) {
@@ -2277,6 +3286,15 @@ function formatDate(value) {
   return new Date(value).toLocaleDateString('zh-CN', {
     month: '2-digit',
     day: '2-digit',
+  });
+}
+
+function formatFullDate(value) {
+  if (!value) return '';
+  return new Date(value).toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
   });
 }
 

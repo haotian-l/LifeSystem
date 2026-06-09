@@ -122,18 +122,18 @@ AI 不应该凭空提醒“你该努力了”。每一次提醒都应该能解�
 
 所以 `project_id`、`task_id`、`timeline_id`、`goal_id` 这类关联字段，除非有明确业务约束，默认都应该可为空。缺少关联不代表记录无效，只代表以后可以补齐。
 
-### 2.10 标签是受控集合，人物是独立属性
+### 2.10 标签是受控集合，人物是显式关系
 
 Tag 不应该被 AI 当成自由文本随意生成。它应该是一组稳定、受控的系统集合，用来表达活动类型、工作模式、状态信号、价值判断、兴趣爱好等横向维度。
 
-人物不能混进 tag。和谁见面、谁参与讨论、谁影响某件事，应该通过独立的 person_id 关联，而不是生成“唐博”“朋友”“客户”这类标签。
+人物不能混进 tag。和谁见面、谁参与讨论、谁影响某件事，应该通过 Record-Person Link 显式挂到对应 `person_id`，而不是生成“唐博”“朋友”“客户”这类标签，也不是事后扫描 timeline 文本猜测。
 
 这个边界很重要：
 
 - Tag 负责分类。
 - Project 负责长期方向。
 - Task 负责行动。
-- Person 负责人物关联。
+- Person 负责人物索引，Record-Person Link 负责把具体记录挂到人上。
 
 如果 AI 识别到一个新人物，可以进入待确认；如果 AI 识别到一个新标签，应该先映射到已有集合。无法映射但确实代表新的稳定活动或分类时，进入“标签候选”，经确认后才能加入 tag 集合。
 
@@ -421,11 +421,11 @@ Timeline 的输入不是固定表单，而是聊天里的行动表达。
 
 设计说明：
 
-- timeline、task、moment、report 可以通过 person_id 关联人物。
-- person_id 是独立 attribute，不通过 tag 表达。
+- timeline、task、schedule、moment、review、goal、habit、reminder 可以通过 Record-Person Link 关联人物。
+- `person_id` 是稳定人物索引，不通过 tag 表达，也不直接塞进 timeline 的自由文本当作关系。
 - 一个人的多个称呼不直接塞进一个 alias 字段，而是用 Person Alias 管理。
 - AI 识别到新人物时，不应直接创建长期人物档案，应该先进入待确认。
-- “和唐博讨论 AlayaBox”应当表现为：timeline 关联 project_id=AlayaBox，同时关联 person_id=唐博。
+- “和唐博讨论 AlayaBox”应当表现为：timeline 关联 project_id=AlayaBox，同时创建一条 Record-Person Link 挂到 `person_id=唐博`。
 
 ### 3.8 Person Alias：人物称呼
 
@@ -1291,7 +1291,7 @@ AI 不应该要求用户用固定格式输入。用户只要自然说“我去�
 人物匹配按这个顺序处理：
 
 1. 先用 Person Alias 匹配已有称呼。
-2. 如果唯一命中，就关联对应 person_id，并保存原文里的 `mention_text`。
+2. 如果唯一命中，就在相关记录上创建 Record-Person Link，关联对应 person_id，并保存原文里的 `mention_text`。
 3. 如果多个候选命中，进入待确认，不要猜。
 4. 如果没有命中，但看起来是具体人物，进入新人物候选。
 5. 如果只是“几个朋友”“一个客户”这类泛称，不创建 Person，必要时只保留在 timeline 描述里。
@@ -1626,7 +1626,7 @@ personal-data/
 | Moment | 和这个人有关的高光时刻 |
 | Report | 报告里提到这个人的上下文 |
 
-人物页展示的是“围绕这个人的事实索引”，不是联系人资料库。真正的事实仍然落在 timeline、task、moment、report 里。
+人物页展示的是“围绕这个人的事实索引”，不是联系人资料库。真正的事实仍然落在 timeline、task、schedule、moment、review 等记录里；这些记录通过 Record-Person Link 挂到人物上，而不是通过文本匹配临时生成。
 
 ## 11. 呈现方式
 

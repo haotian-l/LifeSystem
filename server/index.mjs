@@ -6,7 +6,13 @@ import { fileURLToPath } from 'node:url';
 import {
   initDb,
   dashboard,
-  handleChat,
+  createSourceInput,
+  createTimelineEntry,
+  createMoment,
+  updateMoment,
+  createPerson,
+  updatePerson,
+  ingestOpenClaw,
   createGoal,
   updateGoal,
   updateTimeline,
@@ -16,10 +22,15 @@ import {
   updateTag,
   deleteTag,
   createHabit,
+  updateHabit,
   logHabit,
   createScheduleEvent,
   updateScheduleEvent,
+  createReminder,
+  updateReminder,
   generateReport,
+  createReview,
+  updateReview,
 } from './store.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -37,9 +48,41 @@ const server = createServer(async (req, res) => {
       return json(res, dashboard());
     }
 
-    if (url.pathname === '/api/chat' && req.method === 'POST') {
+    if (url.pathname === '/api/ingest' && req.method === 'POST') {
       const body = await readJson(req);
-      return json(res, handleChat(body.text || ''));
+      return json(res, ingestOpenClaw(body));
+    }
+
+    if (url.pathname === '/api/source-inputs' && req.method === 'POST') {
+      const body = await readJson(req);
+      return json(res, createSourceInput(body));
+    }
+
+    if (url.pathname === '/api/timeline' && req.method === 'POST') {
+      const body = await readJson(req);
+      return json(res, createTimelineEntry(body));
+    }
+
+    if (url.pathname === '/api/moments' && req.method === 'POST') {
+      const body = await readJson(req);
+      return json(res, createMoment(body));
+    }
+
+    const momentMatch = url.pathname.match(/^\/api\/moments\/([^/]+)$/);
+    if (momentMatch && req.method === 'PATCH') {
+      const body = await readJson(req);
+      return json(res, updateMoment(momentMatch[1], body));
+    }
+
+    if (url.pathname === '/api/people' && req.method === 'POST') {
+      const body = await readJson(req);
+      return json(res, createPerson(body));
+    }
+
+    const personMatch = url.pathname.match(/^\/api\/people\/([^/]+)$/);
+    if (personMatch && req.method === 'PATCH') {
+      const body = await readJson(req);
+      return json(res, updatePerson(personMatch[1], body));
     }
 
     if (url.pathname === '/api/goals' && req.method === 'POST') {
@@ -90,6 +133,12 @@ const server = createServer(async (req, res) => {
       return json(res, createHabit(body));
     }
 
+    const habitMatch = url.pathname.match(/^\/api\/habits\/([^/]+)$/);
+    if (habitMatch && req.method === 'PATCH') {
+      const body = await readJson(req);
+      return json(res, updateHabit(habitMatch[1], body));
+    }
+
     const habitLogMatch = url.pathname.match(/^\/api\/habits\/([^/]+)\/log$/);
     if (habitLogMatch && req.method === 'POST') {
       const body = await readJson(req);
@@ -107,9 +156,31 @@ const server = createServer(async (req, res) => {
       return json(res, updateScheduleEvent(scheduleMatch[1], body));
     }
 
+    if (url.pathname === '/api/reminders' && req.method === 'POST') {
+      const body = await readJson(req);
+      return json(res, createReminder(body));
+    }
+
+    const reminderMatch = url.pathname.match(/^\/api\/reminders\/([^/]+)$/);
+    if (reminderMatch && req.method === 'PATCH') {
+      const body = await readJson(req);
+      return json(res, updateReminder(reminderMatch[1], body));
+    }
+
     if (url.pathname === '/api/reports/generate' && req.method === 'POST') {
       const body = await readJson(req);
       return json(res, generateReport(body.periodType || 'day'));
+    }
+
+    if (url.pathname === '/api/reviews' && req.method === 'POST') {
+      const body = await readJson(req);
+      return json(res, createReview(body));
+    }
+
+    const reviewMatch = url.pathname.match(/^\/api\/reviews\/([^/]+)$/);
+    if (reviewMatch && req.method === 'PATCH') {
+      const body = await readJson(req);
+      return json(res, updateReview(reviewMatch[1], body));
     }
 
     return serveStatic(url.pathname, res);

@@ -13,6 +13,8 @@ export function initDb(dbPath) {
 }
 
 export function dashboard() {
+  archiveExpiredGoals();
+
   const timeline = all(
     `SELECT timeline_entries.*, tasks.title AS task_title, tasks.task_code
      FROM timeline_entries
@@ -26,7 +28,13 @@ export function dashboard() {
     tagKeys: tagKeysFor(entry.timeline_id),
   }));
 
-  const goals = all('SELECT * FROM goals ORDER BY period_start DESC, priority ASC, created_at DESC LIMIT 200').map((goal) => ({
+  const goals = all(`
+    SELECT *
+    FROM goals
+    WHERE status <> 'deleted'
+    ORDER BY period_start DESC, priority ASC, created_at DESC
+    LIMIT 200
+  `).map((goal) => ({
     ...goal,
     tags: tagNamesFor(goal.goal_id),
     tagIds: tagIdsFor(goal.goal_id),
@@ -57,18 +65,48 @@ export function dashboard() {
     tagKeys: tagKeysFor(task.task_id),
   }));
   const reports = all('SELECT * FROM reports ORDER BY generated_at DESC LIMIT 6');
+  const reviews = all('SELECT * FROM reviews ORDER BY is_pinned DESC, created_at DESC LIMIT 80').map((review) => ({
+    ...review,
+    tags: tagNamesFor(review.review_id),
+    tagIds: tagIdsFor(review.review_id),
+    tagKeys: tagKeysFor(review.review_id),
+  }));
+  const moments = all(
+    `SELECT moments.*, timeline_entries.title AS timeline_title
+     FROM moments
+     LEFT JOIN timeline_entries ON timeline_entries.timeline_id = moments.timeline_id
+     ORDER BY moments.happened_at DESC
+     LIMIT 300`,
+  ).map((moment) => ({
+    ...moment,
+    tags: tagNamesFor(moment.moment_id),
+    tagIds: tagIdsFor(moment.moment_id),
+    tagKeys: tagKeysFor(moment.moment_id),
+  }));
   const reminders = all('SELECT * FROM reminders WHERE status = ? ORDER BY priority ASC, created_at DESC LIMIT 4', ['pending']);
-  const habits = all('SELECT * FROM habits WHERE status = ? ORDER BY priority ASC, created_at ASC', ['active']).map((habit) => ({
+  const habits = all(`
+    SELECT *
+    FROM habits
+    WHERE status <> 'deleted'
+    ORDER BY
+      CASE status WHEN 'active' THEN 1 WHEN 'archived' THEN 2 ELSE 3 END,
+      priority ASC,
+      created_at ASC
+  `).map((habit) => ({
     ...habit,
     tags: tagNamesFor(habit.habit_id),
     tagIds: tagIdsFor(habit.habit_id),
     tagKeys: tagKeysFor(habit.habit_id),
     todayLog: get('SELECT * FROM habit_logs WHERE habit_id = ? AND local_date = ?', [habit.habit_id, today()]) || null,
-    weekCount: get(
-      'SELECT COUNT(*) AS count FROM habit_logs WHERE habit_id = ? AND local_date >= ? AND status = ?',
-      [habit.habit_id, daysAgo(6), 'done'],
-    ).count,
   }));
+  const habitLogs = all(
+    `SELECT habit_logs.*, habits.title, habits.cadence, habits.target_count
+     FROM habit_logs
+     JOIN habits ON habits.habit_id = habit_logs.habit_id
+     WHERE habits.status <> ?
+     ORDER BY habit_logs.local_date ASC, habits.priority ASC`,
+    ['deleted'],
+  );
   const schedule = all('SELECT * FROM schedule_events ORDER BY start_at ASC LIMIT 20').map((event) => ({
     ...event,
     tags: tagNamesFor(event.event_id),
@@ -109,6 +147,7 @@ export function dashboard() {
   const people = all('SELECT * FROM people WHERE is_active = 1 ORDER BY display_name').map((person) => ({
     ...person,
     aliases: all('SELECT alias_text FROM person_aliases WHERE person_id = ? ORDER BY is_primary DESC, alias_text', [person.person_id]).map((row) => row.alias_text),
+    relatedRecords: personRelatedRecords(person.person_id),
   }));
 
   return {
@@ -121,54 +160,231 @@ export function dashboard() {
     goals,
     tasks,
     reports,
+    reviews,
+    moments,
     reminders,
     habits,
+    habitLogs,
     schedule,
     tags,
     allTags,
     people,
-    aiSuggestion: suggestion(timeline, goals),
     metrics: metrics(timeline),
   };
 }
 
-export function handleChat(text) {
-  const trimmed = text.trim();
-  if (!trimmed) return dashboard();
+export function createSourceInput(payload = {}) {
+  const inputId = createSourceInputRecord(payload);
+  return withCreated({ inputId });
+}
 
-  const inputId = id('input');
-  run(
-    'INSERT INTO source_inputs (input_id, happened_at, channel, raw_text, author) VALUES (?, ?, ?, ?, ?)',
-    [inputId, now(), 'chat', trimmed, 'user'],
+export function createTimelineEntry(payload = {}) {
+  const title = String(payload.title || '').trim();
+  if (!title) return dashboard();
+
+  const sourceInputId = payload.sourceInputId || payload.source_input_id || (
+    payload.rawText || payload.raw_text
+      ? createSourceInputRecord({
+        rawText: payload.rawText || payload.raw_text,
+        happenedAt: payload.happenedAt || payload.happened_at || payload.startAt || payload.start_at,
+        channel: payload.channel || 'openclaw',
+        author: payload.author || 'user',
+      })
+      : null
   );
+  const startAt = payload.startAt || payload.start_at || now();
+  const endAt = payload.endAt || payload.end_at || null;
+  const timelineId = id('timeline');
 
-  const action = detectAction(trimmed);
-  if (action.type === 'finish') {
-    closeOpenTimeline(action.title || trimmed, inputId);
-  } else if (action.type === 'switch') {
-    closeOpenTimeline('切换任务', inputId);
-    createTimeline(action.title, inputId, ['work']);
-  } else if (action.type === 'rest') {
-    closeOpenTimeline('休息', inputId);
-    createTimeline(action.title || '休息', inputId, ['rest']);
-  } else if (action.type === 'historic') {
-    createTimeline(action.title, inputId, ['work'], action.startAt, action.endAt, 0);
-  } else {
-    createTimeline(action.title, inputId, action.tags);
+  run(
+    `INSERT INTO timeline_entries
+      (timeline_id, source_input_id, start_at, end_at, local_date, title, description, kind, project_id, task_id, quality, is_estimated)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      timelineId,
+      sourceInputId,
+      startAt,
+      endAt,
+      today(startAt),
+      title,
+      payload.description || '',
+      normalizeTimelineKind(payload.kind || 'activity_block'),
+      payload.projectId || payload.project_id || null,
+      payload.taskId || payload.task_id || null,
+      payload.quality === '' || payload.quality == null ? null : Number(payload.quality),
+      payload.isEstimated || payload.is_estimated ? 1 : 0,
+    ],
+  );
+  replaceTags(timelineId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
+  replacePersonLinks('timeline', timelineId, personRefsFromPayload(payload));
+
+  return withCreated({ timelineId, sourceInputId });
+}
+
+export function createMoment(payload = {}) {
+  const title = String(payload.title || '').trim();
+  if (!title) return dashboard();
+
+  const happenedAt = payload.happenedAt || payload.happened_at || now();
+  const sourceInputId = payload.sourceInputId || payload.source_input_id || (
+    payload.rawText || payload.raw_text
+      ? createSourceInputRecord({
+        rawText: payload.rawText || payload.raw_text,
+        happenedAt,
+        channel: payload.channel || 'openclaw',
+        author: payload.author || 'user',
+      })
+      : null
+  );
+  const momentId = id('moment');
+
+  run(
+    `INSERT INTO moments
+      (moment_id, source_input_id, happened_at, local_date, title, story, importance, image_url, project_id, task_id, timeline_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      momentId,
+      sourceInputId,
+      happenedAt,
+      today(happenedAt),
+      title,
+      payload.story || payload.description || '',
+      normalizeImportance(payload.importance),
+      payload.imageUrl || payload.image_url || '',
+      payload.projectId || payload.project_id || null,
+      payload.taskId || payload.task_id || null,
+      payload.timelineId || payload.timeline_id || null,
+    ],
+  );
+  replaceTags(momentId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
+  replacePersonLinks('moment', momentId, personRefsFromPayload(payload));
+
+  return withCreated({ momentId, sourceInputId });
+}
+
+export function updateMoment(momentId, payload = {}) {
+  const existing = get('SELECT * FROM moments WHERE moment_id = ?', [momentId]);
+  if (!existing) return dashboard();
+  const happenedAt = payload.happenedAt || payload.happened_at || existing.happened_at;
+
+  run(
+    `UPDATE moments
+     SET source_input_id = ?, happened_at = ?, local_date = ?, title = ?, story = ?, importance = ?,
+         image_url = ?, project_id = ?, task_id = ?, timeline_id = ?
+     WHERE moment_id = ?`,
+    [
+      payload.sourceInputId ?? payload.source_input_id ?? existing.source_input_id ?? null,
+      happenedAt,
+      today(happenedAt),
+      String(payload.title || existing.title).trim(),
+      payload.story ?? payload.description ?? existing.story ?? '',
+      normalizeImportance(payload.importance ?? existing.importance),
+      payload.imageUrl ?? payload.image_url ?? existing.image_url ?? '',
+      payload.projectId ?? payload.project_id ?? existing.project_id ?? null,
+      payload.taskId ?? payload.task_id ?? existing.task_id ?? null,
+      payload.timelineId ?? payload.timeline_id ?? existing.timeline_id ?? null,
+      momentId,
+    ],
+  );
+  if (Array.isArray(payload.tagIds) || Array.isArray(payload.tagKeys)) {
+    replaceTags(momentId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
   }
-
-  if (/高光|值得记|记成/.test(trimmed)) {
-    createMoment(trimmed, inputId);
+  if (hasPersonLinksPayload(payload)) {
+    replacePersonLinks('moment', momentId, personRefsFromPayload(payload));
   }
-
   return dashboard();
+}
+
+export function createPerson(payload = {}) {
+  const displayName = String(payload.displayName || payload.display_name || '').trim();
+  if (!displayName) return dashboard();
+  const personId = id('person');
+
+  run(
+    'INSERT INTO people (person_id, display_name, role, relationship_type, note, is_active) VALUES (?, ?, ?, ?, ?, ?)',
+    [
+      personId,
+      displayName,
+      payload.role || '',
+      payload.relationshipType || payload.relationship_type || '',
+      payload.note || '',
+      payload.isActive === 0 || payload.is_active === 0 ? 0 : 1,
+    ],
+  );
+  replacePersonAliases(personId, payload.aliases || [displayName]);
+  return withCreated({ personId });
+}
+
+export function updatePerson(personId, payload = {}) {
+  const existing = get('SELECT * FROM people WHERE person_id = ?', [personId]);
+  if (!existing) return dashboard();
+
+  run(
+    'UPDATE people SET display_name = ?, role = ?, relationship_type = ?, note = ?, is_active = ? WHERE person_id = ?',
+    [
+      String(payload.displayName || payload.display_name || existing.display_name).trim(),
+      payload.role ?? existing.role ?? '',
+      payload.relationshipType ?? payload.relationship_type ?? existing.relationship_type ?? '',
+      payload.note ?? existing.note ?? '',
+      payload.isActive ?? payload.is_active ?? existing.is_active ?? 1,
+      personId,
+    ],
+  );
+  if (Array.isArray(payload.aliases)) {
+    replacePersonAliases(personId, payload.aliases);
+  }
+  return dashboard();
+}
+
+export function ingestOpenClaw(payload = {}) {
+  const operations = Array.isArray(payload.operations) ? payload.operations : [];
+  const refs = new Map();
+  const results = [];
+  let sourceInputId = payload.sourceInputId || payload.source_input_id || null;
+
+  db.exec('BEGIN');
+  try {
+    if (!sourceInputId && (payload.rawText || payload.raw_text || payload.text)) {
+      sourceInputId = createSourceInputRecord({
+        rawText: payload.rawText || payload.raw_text || payload.text,
+        happenedAt: payload.happenedAt || payload.happened_at,
+        channel: payload.channel || 'openclaw',
+        author: payload.author || 'user',
+      });
+    }
+
+    if (sourceInputId) {
+      refs.set('source', sourceInputId);
+      refs.set('$source', sourceInputId);
+    }
+
+    operations.forEach((operation, index) => {
+      const result = applyOpenClawOperation(operation, refs, sourceInputId);
+      results.push({ index, ...result });
+      if (operation.ref && result.created) {
+        addCreatedRefs(operation.ref, result.created, refs);
+      }
+    });
+
+    db.exec('COMMIT');
+    return {
+      ...dashboard(),
+      ingest: {
+        sourceInputId,
+        results,
+      },
+    };
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 export function createGoal(payload) {
   const title = String(payload.title || '').trim();
   if (!title) return dashboard();
 
-  const level = ['year', 'month', 'week'].includes(payload.level) ? payload.level : 'month';
+  const level = normalizeGoalLevel(payload.level);
   const today = new Date();
   const period = periodBounds(level, today);
   const goalId = id('goal');
@@ -177,27 +393,48 @@ export function createGoal(payload) {
     `INSERT INTO goals
       (goal_id, title, level, period_start, period_end, status, priority, success_criteria, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [goalId, title, level, period.start, period.end, payload.status || 'active', 3, payload.successCriteria || '', now()],
+    [
+      goalId,
+      title,
+      level,
+      period.start,
+      period.end,
+      normalizeGoalStatus(payload.status || 'active'),
+      Number(payload.priority ?? 3),
+      payload.successCriteria || payload.success_criteria || '',
+      now(),
+    ],
   );
 
   replaceTags(goalId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
+  replacePersonLinks('goal', goalId, personRefsFromPayload(payload));
 
-  return dashboard();
+  return withCreated({ goalId });
 }
 
 export function updateGoal(goalId, payload) {
   const existing = get('SELECT * FROM goals WHERE goal_id = ?', [goalId]);
   if (!existing) return dashboard();
+  const level = normalizeGoalLevel(payload.level || existing.level);
+  const status = normalizeGoalStatus(payload.status || existing.status);
+  let period = level === existing.level
+    ? { start: existing.period_start, end: existing.period_end }
+    : periodBounds(level, new Date());
+  if (status === 'active' && period.end < today()) {
+    period = periodBounds(level, new Date());
+  }
 
   run(
     `UPDATE goals
-     SET title = ?, level = ?, status = ?, priority = ?, success_criteria = ?
+     SET title = ?, level = ?, period_start = ?, period_end = ?, status = ?, priority = ?, success_criteria = ?
      WHERE goal_id = ?`,
     [
       String(payload.title || existing.title).trim(),
-      payload.level || existing.level,
-      payload.status || existing.status,
-      Number(payload.priority || existing.priority),
+      level,
+      period.start,
+      period.end,
+      status,
+      Number(payload.priority ?? existing.priority),
       payload.successCriteria ?? payload.success_criteria ?? existing.success_criteria ?? '',
       goalId,
     ],
@@ -205,6 +442,9 @@ export function updateGoal(goalId, payload) {
 
   if (Array.isArray(payload.tagIds) || Array.isArray(payload.tagKeys)) {
     replaceTags(goalId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
+  }
+  if (hasPersonLinksPayload(payload)) {
+    replacePersonLinks('goal', goalId, personRefsFromPayload(payload));
   }
   return dashboard();
 }
@@ -221,7 +461,7 @@ export function updateTimeline(timelineId, payload) {
       String(payload.title || existing.title).trim(),
       payload.description ?? existing.description ?? '',
       payload.quality === '' || payload.quality == null ? null : Number(payload.quality),
-      payload.kind || existing.kind,
+      normalizeTimelineKind(payload.kind || existing.kind),
       payload.taskId ?? payload.task_id ?? existing.task_id ?? null,
       timelineId,
     ],
@@ -229,6 +469,9 @@ export function updateTimeline(timelineId, payload) {
 
   if (Array.isArray(payload.tagIds) || Array.isArray(payload.tagKeys)) {
     replaceTags(timelineId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
+  }
+  if (hasPersonLinksPayload(payload)) {
+    replacePersonLinks('timeline', timelineId, personRefsFromPayload(payload));
   }
   return dashboard();
 }
@@ -238,6 +481,7 @@ export function createTask(payload) {
   if (!title) return dashboard();
 
   const taskId = id('task');
+  const taskCode = nextTaskCode();
   const status = normalizeTaskStatus(payload.status || 'todo');
   const timestamp = now();
   run(
@@ -246,7 +490,7 @@ export function createTask(payload) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       taskId,
-      nextTaskCode(),
+      taskCode,
       title,
       payload.description || '',
       status,
@@ -262,8 +506,9 @@ export function createTask(payload) {
     ],
   );
   replaceTags(taskId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
+  replacePersonLinks('task', taskId, personRefsFromPayload(payload));
   recordTaskEvent(taskId, 'created', null, status, payload.note || '');
-  return dashboard();
+  return withCreated({ taskId, taskCode });
 }
 
 export function updateTask(taskId, payload) {
@@ -301,6 +546,9 @@ export function updateTask(taskId, payload) {
   if (Array.isArray(payload.tagIds) || Array.isArray(payload.tagKeys)) {
     replaceTags(taskId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
   }
+  if (hasPersonLinksPayload(payload)) {
+    replacePersonLinks('task', taskId, personRefsFromPayload(payload));
+  }
   if (statusChanged) recordTaskEvent(taskId, 'status_changed', existing.status, status, payload.note || '');
   return dashboard();
 }
@@ -312,6 +560,7 @@ export function createTag(payload) {
 
   const tagId = id('tag');
   const parent = normalizeParentTag(parentRefFromPayload(payload), tagId);
+  const category = parent?.category || normalizeTagCategory(payload.category || 'activity_type');
   run(
     `INSERT OR IGNORE INTO tags
       (tag_id, tag_key, name, category, parent_tag_id, parent_tag_key, description, color, sort_order, is_active)
@@ -320,7 +569,7 @@ export function createTag(payload) {
       tagId,
       tagKey,
       name,
-      normalizeTagCategory(payload.category || 'activity_type'),
+      category,
       parent?.tag_id || null,
       parent?.tag_key || null,
       payload.description || '',
@@ -329,7 +578,8 @@ export function createTag(payload) {
       payload.isActive === false || payload.is_active === 0 ? 0 : 1,
     ],
   );
-  return dashboard();
+  const savedTag = tagByRef(tagKey);
+  return withCreated({ tagId: savedTag?.tag_id || tagId, tagKey });
 }
 
 export function updateTag(tagRef, payload) {
@@ -337,14 +587,16 @@ export function updateTag(tagRef, payload) {
   if (!existing) return dashboard();
 
   const requestedParent = parentRefFromPayload(payload, existing.parent_tag_id ?? null);
-  const parent = hasChildTags(existing.tag_id) ? null : normalizeParentTag(requestedParent, existing.tag_id);
+  const hasChildren = hasChildTags(existing.tag_id);
+  const parent = hasChildren ? null : normalizeParentTag(requestedParent, existing.tag_id);
+  const category = hasChildren ? existing.category : parent?.category || normalizeTagCategory(payload.category || existing.category);
   run(
     `UPDATE tags
      SET name = ?, category = ?, parent_tag_id = ?, parent_tag_key = ?, description = ?, color = ?, sort_order = ?, is_active = ?
      WHERE tag_id = ?`,
     [
       String(payload.name || existing.name).trim(),
-      normalizeTagCategory(payload.category || existing.category),
+      category,
       parent?.tag_id || null,
       parent?.tag_key || null,
       payload.description ?? existing.description ?? '',
@@ -384,15 +636,43 @@ export function createHabit(payload) {
     [
       habitId,
       title,
-      payload.cadence || 'daily',
-      Number(payload.targetCount || payload.target_count || 1),
-      payload.status || 'active',
+      'daily',
+      1,
+      normalizeHabitStatus(payload.status || 'active'),
       Number(payload.priority || 3),
       payload.note || '',
       now(),
     ],
   );
   replaceTags(habitId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
+  replacePersonLinks('habit', habitId, personRefsFromPayload(payload));
+  return withCreated({ habitId });
+}
+
+export function updateHabit(habitId, payload = {}) {
+  const existing = get('SELECT * FROM habits WHERE habit_id = ?', [habitId]);
+  if (!existing) return dashboard();
+
+  run(
+    `UPDATE habits
+     SET title = ?, cadence = ?, target_count = ?, status = ?, priority = ?, note = ?
+     WHERE habit_id = ?`,
+    [
+      String(payload.title ?? existing.title).trim(),
+      'daily',
+      1,
+      normalizeHabitStatus(payload.status || existing.status),
+      Number(payload.priority ?? existing.priority ?? 3),
+      payload.note ?? existing.note ?? '',
+      habitId,
+    ],
+  );
+  if (Array.isArray(payload.tagIds) || Array.isArray(payload.tag_ids) || Array.isArray(payload.tagKeys)) {
+    replaceTags(habitId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
+  }
+  if (hasPersonLinksPayload(payload)) {
+    replacePersonLinks('habit', habitId, personRefsFromPayload(payload));
+  }
   return dashboard();
 }
 
@@ -413,7 +693,7 @@ export function logHabit(habitId, payload = {}) {
       now(),
     ],
   );
-  return dashboard();
+  return withCreated({ habitId, localDate: payload.localDate || today() });
 }
 
 export function createScheduleEvent(payload) {
@@ -453,7 +733,11 @@ export function createScheduleEvent(payload) {
     ],
   );
   replaceTags(eventId, tagRefs);
-  return dashboard();
+  replacePersonLinks('schedule', eventId, personRefsFromPayload(payload));
+  if (linkedTimelineId) {
+    replacePersonLinks('timeline', linkedTimelineId, personRefsFromPayload(payload));
+  }
+  return withCreated({ eventId, timelineId: linkedTimelineId });
 }
 
 export function updateScheduleEvent(eventId, payload) {
@@ -480,36 +764,281 @@ export function updateScheduleEvent(eventId, payload) {
   if (Array.isArray(payload.tagIds) || Array.isArray(payload.tagKeys)) {
     replaceTags(eventId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
   }
+  if (hasPersonLinksPayload(payload)) {
+    replacePersonLinks('schedule', eventId, personRefsFromPayload(payload));
+  }
+  return dashboard();
+}
+
+export function createReminder(payload = {}) {
+  const title = String(payload.title || '').trim();
+  if (!title) return dashboard();
+  const reminderId = id('reminder');
+
+  run(
+    `INSERT INTO reminders
+      (reminder_id, title, reminder_type, status, priority, reason, suggested_action, goal_id, task_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      reminderId,
+      title,
+      payload.reminderType || payload.reminder_type || 'follow_up',
+      normalizeReminderStatus(payload.status || 'pending'),
+      Number(payload.priority || 3),
+      payload.reason || '',
+      payload.suggestedAction || payload.suggested_action || '',
+      payload.goalId || payload.goal_id || null,
+      payload.taskId || payload.task_id || null,
+      now(),
+    ],
+  );
+  replacePersonLinks('reminder', reminderId, personRefsFromPayload(payload));
+  return withCreated({ reminderId });
+}
+
+export function updateReminder(reminderId, payload = {}) {
+  const existing = get('SELECT * FROM reminders WHERE reminder_id = ?', [reminderId]);
+  if (!existing) return dashboard();
+
+  run(
+    `UPDATE reminders
+     SET title = ?, reminder_type = ?, status = ?, priority = ?, reason = ?, suggested_action = ?, goal_id = ?, task_id = ?
+     WHERE reminder_id = ?`,
+    [
+      String(payload.title || existing.title).trim(),
+      payload.reminderType || payload.reminder_type || existing.reminder_type,
+      normalizeReminderStatus(payload.status || existing.status),
+      Number(payload.priority || existing.priority || 3),
+      payload.reason ?? existing.reason ?? '',
+      payload.suggestedAction ?? payload.suggested_action ?? existing.suggested_action ?? '',
+      payload.goalId ?? payload.goal_id ?? existing.goal_id ?? null,
+      payload.taskId ?? payload.task_id ?? existing.task_id ?? null,
+      reminderId,
+    ],
+  );
+  if (hasPersonLinksPayload(payload)) {
+    replacePersonLinks('reminder', reminderId, personRefsFromPayload(payload));
+  }
   return dashboard();
 }
 
 export function generateReport(periodType) {
   const type = ['day', 'week', 'month'].includes(periodType) ? periodType : 'day';
-  const timeline = all('SELECT * FROM timeline_entries ORDER BY start_at ASC');
-  const goals = all('SELECT * FROM goals WHERE status = ? ORDER BY created_at DESC LIMIT 4', ['active']);
-  const doneTasks = get('SELECT COUNT(*) AS count FROM tasks WHERE status = ?', ['done']).count;
-  const moments = get('SELECT COUNT(*) AS count FROM moments').count;
+  const { start: periodStart, end: periodEnd } = completedReportPeriodBounds(type, new Date());
+  const timeline = all(
+    'SELECT * FROM timeline_entries WHERE local_date >= ? AND local_date <= ? ORDER BY start_at ASC',
+    [periodStart, periodEnd],
+  );
+  const goals = all(
+    `SELECT *
+     FROM goals
+     WHERE status <> ?
+       AND period_start <= ?
+       AND period_end >= ?
+     ORDER BY priority ASC, created_at DESC
+     LIMIT 4`,
+    ['deleted', periodEnd, periodStart],
+  );
+  const activeHabits = get('SELECT COUNT(*) AS count FROM habits WHERE status = ?', ['active']).count;
+  const doneHabits = get(
+    'SELECT COUNT(*) AS count FROM habit_logs WHERE local_date >= ? AND local_date <= ? AND status = ?',
+    [periodStart, periodEnd, 'done'],
+  ).count;
+  const periodEvents = get(
+    'SELECT COUNT(*) AS count FROM schedule_events WHERE date(start_at) >= ? AND date(start_at) <= ? AND status = ?',
+    [periodStart, periodEnd, 'planned'],
+  ).count;
+  const doneTasks = get(
+    'SELECT COUNT(*) AS count FROM tasks WHERE status = ? AND date(COALESCE(completed_at, status_updated_at, created_at)) >= ? AND date(COALESCE(completed_at, status_updated_at, created_at)) <= ?',
+    ['done', periodStart, periodEnd],
+  ).count;
+  const activeTasks = get('SELECT COUNT(*) AS count FROM tasks WHERE status IN (?, ?, ?)', ['todo', 'doing', 'blocked']).count;
+  const moments = get(
+    'SELECT COUNT(*) AS count FROM moments WHERE local_date >= ? AND local_date <= ?',
+    [periodStart, periodEnd],
+  ).count;
   const trackedHours = metrics(timeline).trackedHours;
+  const activityFocus = topTagNames('activity_type');
+  const stateSignals = topTagNames('state_signal');
 
   const title = {
-    day: '今日简报',
-    week: '本周回顾',
-    month: '本月目标检查',
+    day: '昨日系统复盘',
+    week: '上周系统复盘',
+    month: '上月系统复盘',
   }[type];
 
   const summary = [
-    `已记录 ${trackedHours} 小时，完成 ${doneTasks} 个任务，沉淀 ${moments} 个高光。`,
-    goals.length ? `当前目标聚焦在：${goals.map((goal) => goal.title).join('、')}。` : '还没有明确目标，可以先写一个月度目标。',
-    timeline[0] ? `最近一段时间线是“${timeline.at(-1).title}”。` : '可以从聊天框开始记录第一条 timeline。',
-  ].join(' ');
+    `时间：已记录 ${trackedHours} 小时，最近一段时间线是“${timeline.at(-1)?.title || '暂无'}”。`,
+    goals.length ? `目标：周期内关联 ${goals.map((goal) => goal.title).join('、')}。` : '目标：这个周期还没有关联目标。',
+    `行动：当前任务 ${activeTasks} 个，已完成 ${doneTasks} 个，沉淀 ${moments} 个高光。`,
+    `节律：习惯完成 ${doneHabits} 次，当前习惯 ${activeHabits} 个，周期内日程 ${periodEvents} 个。`,
+    `活动重心：${activityFocus.length ? activityFocus.join('、') : '暂无'}。`,
+    stateSignals.length ? `过程状态：${stateSignals.join('、')}。` : '过程状态：还没有足够记录，需要你补充推进是否顺畅、是否被打断或卡住。',
+  ].join('\n');
 
-  run(
-    `INSERT INTO reports
-      (report_id, period_type, period_start, period_end, title, summary, generated_at, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id('report'), type, today(), today(), title, summary, now(), 'final'],
+  const generatedAt = now();
+  const existingReport = get(
+    `SELECT *
+     FROM reports
+     WHERE period_type = ? AND period_start = ? AND period_end = ?
+     ORDER BY generated_at DESC
+     LIMIT 1`,
+    [type, periodStart, periodEnd],
+  );
+  const reportId = existingReport?.report_id || id('report');
+
+  if (existingReport) {
+    run(
+      `UPDATE reports
+       SET title = ?, summary = ?, generated_at = ?, status = ?
+       WHERE report_id = ?`,
+      [title, summary, generatedAt, 'final', reportId],
+    );
+  } else {
+    run(
+      `INSERT INTO reports
+        (report_id, period_type, period_start, period_end, title, summary, generated_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [reportId, type, periodStart, periodEnd, title, summary, generatedAt, 'final'],
+    );
+  }
+
+  upsertGeneratedReview({
+    title,
+    reviewType: type,
+    periodStart,
+    periodEnd,
+    summary,
+    sourceReportId: reportId,
+  });
+
+  return dashboard();
+}
+
+function upsertGeneratedReview({ title, reviewType, periodStart, periodEnd, summary, sourceReportId }) {
+  const existingReview = get(
+    'SELECT * FROM reviews WHERE source_report_id = ? ORDER BY created_at DESC LIMIT 1',
+    [sourceReportId],
   );
 
+  if (!existingReview) {
+    createReviewRecord({
+      title,
+      reviewType,
+      periodStart,
+      periodEnd,
+      summary,
+      body: summary,
+      sourceReportId,
+      tagRefs: ['review'],
+    });
+    return;
+  }
+
+  run(
+    `UPDATE reviews
+     SET title = ?, review_type = ?, period_start = ?, period_end = ?, summary = ?, body = ?, updated_at = ?
+     WHERE review_id = ?`,
+    [title, reviewType, periodStart, periodEnd, summary, summary, now(), existingReview.review_id],
+  );
+  replaceTags(existingReview.review_id, ['review']);
+}
+
+export function createReview(payload) {
+  const sourceReport = payload.sourceReportId || payload.source_report_id
+    ? get('SELECT * FROM reports WHERE report_id = ?', [payload.sourceReportId || payload.source_report_id])
+    : null;
+  const reviewType = normalizeReviewType(payload.reviewType || payload.review_type || sourceReport?.period_type || 'topic');
+  const title = String(payload.title || sourceReport?.title || '未命名复盘').trim();
+  if (!title) return dashboard();
+
+  const reviewId = createReviewRecord({
+    title,
+    reviewType,
+    periodStart: payload.periodStart || payload.period_start || sourceReport?.period_start || today(),
+    periodEnd: payload.periodEnd || payload.period_end || sourceReport?.period_end || today(),
+    summary: payload.summary ?? sourceReport?.summary ?? '',
+    body: payload.body ?? sourceReport?.summary ?? '',
+    learnings: payload.learnings || '',
+    nextActions: payload.nextActions || payload.next_actions || '',
+    sourceReportId: sourceReport?.report_id || payload.sourceReportId || payload.source_report_id || null,
+    isPinned: payload.isPinned || payload.is_pinned ? 1 : 0,
+    tagRefs: payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? [],
+  });
+  replacePersonLinks('review', reviewId, personRefsFromPayload(payload));
+  return withCreated({ reviewId });
+}
+
+function createReviewRecord({
+  title,
+  reviewType,
+  periodStart,
+  periodEnd,
+  summary = '',
+  body = '',
+  learnings = '',
+  nextActions = '',
+  sourceReportId = null,
+  isPinned = 0,
+  tagRefs = [],
+}) {
+  const timestamp = now();
+  const reviewId = id('review');
+  run(
+    `INSERT INTO reviews
+      (review_id, title, review_type, period_start, period_end, summary, body, learnings, next_actions, source_report_id, created_at, updated_at, is_pinned)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      reviewId,
+      title,
+      reviewType,
+      periodStart,
+      periodEnd,
+      summary,
+      body,
+      learnings,
+      nextActions,
+      sourceReportId,
+      timestamp,
+      timestamp,
+      isPinned,
+    ],
+  );
+
+  replaceTags(reviewId, tagRefs);
+  return reviewId;
+}
+
+export function updateReview(reviewId, payload) {
+  const existing = get('SELECT * FROM reviews WHERE review_id = ?', [reviewId]);
+  if (!existing) return dashboard();
+
+  run(
+    `UPDATE reviews
+     SET title = ?, review_type = ?, period_start = ?, period_end = ?, summary = ?, body = ?,
+         learnings = ?, next_actions = ?, updated_at = ?, is_pinned = ?
+     WHERE review_id = ?`,
+    [
+      String(payload.title || existing.title).trim(),
+      normalizeReviewType(payload.reviewType || payload.review_type || existing.review_type),
+      payload.periodStart ?? payload.period_start ?? existing.period_start,
+      payload.periodEnd ?? payload.period_end ?? existing.period_end,
+      payload.summary ?? existing.summary ?? '',
+      payload.body ?? existing.body ?? '',
+      payload.learnings ?? existing.learnings ?? '',
+      payload.nextActions ?? payload.next_actions ?? existing.next_actions ?? '',
+      now(),
+      payload.isPinned ?? payload.is_pinned ?? existing.is_pinned ?? 0,
+      reviewId,
+    ],
+  );
+
+  if (Array.isArray(payload.tagIds) || Array.isArray(payload.tagKeys)) {
+    replaceTags(reviewId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
+  }
+  if (hasPersonLinksPayload(payload)) {
+    replacePersonLinks('review', reviewId, personRefsFromPayload(payload));
+  }
   return dashboard();
 }
 
@@ -589,6 +1118,22 @@ function createTables() {
       status TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS reviews (
+      review_id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      review_type TEXT NOT NULL,
+      period_start TEXT,
+      period_end TEXT,
+      summary TEXT,
+      body TEXT,
+      learnings TEXT,
+      next_actions TEXT,
+      source_report_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      is_pinned INTEGER NOT NULL DEFAULT 0
+    );
+
     CREATE TABLE IF NOT EXISTS moments (
       moment_id TEXT PRIMARY KEY,
       source_input_id TEXT,
@@ -597,6 +1142,7 @@ function createTables() {
       title TEXT NOT NULL,
       story TEXT,
       importance INTEGER NOT NULL,
+      image_url TEXT,
       project_id TEXT,
       task_id TEXT,
       timeline_id TEXT
@@ -637,6 +1183,18 @@ function createTables() {
       alias_type TEXT NOT NULL,
       is_primary INTEGER NOT NULL,
       confidence REAL NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS person_record_links (
+      person_id TEXT NOT NULL,
+      record_type TEXT NOT NULL,
+      record_id TEXT NOT NULL,
+      role TEXT,
+      mention_text TEXT,
+      confidence REAL,
+      note TEXT,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (person_id, record_type, record_id)
     );
 
     CREATE TABLE IF NOT EXISTS reminders (
@@ -704,11 +1262,29 @@ function migrateTables() {
   ensureColumn('tags', 'parent_tag_id', 'TEXT');
   ensureColumn('tags', 'parent_tag_key', 'TEXT');
   ensureColumn('tags', 'sort_order', 'INTEGER NOT NULL DEFAULT 100');
+  ensureColumn('reviews', 'summary', 'TEXT');
+  ensureColumn('reviews', 'body', 'TEXT');
+  ensureColumn('reviews', 'learnings', 'TEXT');
+  ensureColumn('reviews', 'next_actions', 'TEXT');
+  ensureColumn('reviews', 'source_report_id', 'TEXT');
+  ensureColumn('reviews', 'updated_at', 'TEXT');
+  ensureColumn('reviews', 'is_pinned', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('moments', 'image_url', 'TEXT');
+  ensureColumn('person_record_links', 'mention_text', 'TEXT');
+  ensureColumn('person_record_links', 'confidence', 'REAL');
+  run("UPDATE reports SET title = REPLACE(title, '系统复盘草稿', '系统复盘') WHERE title IN ('今日系统复盘草稿', '本周系统复盘草稿', '本月系统复盘草稿')");
+  run("UPDATE reviews SET title = REPLACE(title, '系统复盘草稿', '系统复盘') WHERE title IN ('今日系统复盘草稿', '本周系统复盘草稿', '本月系统复盘草稿')");
+  run("UPDATE source_inputs SET raw_text = REPLACE(raw_text, '人物用 alias 归一', '人物关系用 personRefs 显式挂载') WHERE raw_text LIKE '%人物用 alias 归一%'");
+  run("UPDATE timeline_entries SET description = REPLACE(description, '人物用 alias 归一', '人物关系用 personRefs 显式挂载') WHERE description LIKE '%人物用 alias 归一%'");
+  run("UPDATE goals SET status = 'active' WHERE status = 'paused'");
+  run("UPDATE goals SET status = 'not_done' WHERE status IN ('expired', 'missed')");
+  run("UPDATE habits SET cadence = 'daily', target_count = 1 WHERE cadence <> 'daily' OR target_count <> 1");
   migrateRecordTags();
   ensureColumn('schedule_events', 'goal_id', 'TEXT');
   ensureColumn('schedule_events', 'task_id', 'TEXT');
   ensureColumn('schedule_events', 'timeline_id', 'TEXT');
   run('UPDATE tasks SET status_updated_at = created_at WHERE status_updated_at IS NULL');
+  normalizeTagHierarchy();
 }
 
 function ensureColumn(table, column, definition) {
@@ -809,6 +1385,7 @@ function seed() {
     ['tag_ball_sports', 'ball_sports', '球类', 'activity_type', 'exercise', 55],
     ['tag_dance', 'dance', '跳舞', 'activity_type', 'hobby', 61],
     ['tag_music', 'instruments', '乐器', 'activity_type', 'hobby', 62],
+    ['tag_game', 'game', '游戏', 'activity_type', 'hobby', 63],
     ['tag_reimbursement', 'reimbursement', '报销', 'activity_type', 'admin', 71],
     ['tag_organize', 'organize', '整理', 'activity_type', 'admin', 72],
     ['tag_purchase', 'purchase', '采购', 'activity_type', 'admin', 73],
@@ -816,14 +1393,32 @@ function seed() {
     ['tag_payment', 'payment', '缴费', 'activity_type', 'admin', 75],
     ['tag_admin_process', 'admin_process', '行政', 'activity_type', 'admin', 76],
     ['tag_commute', 'commute', '通勤', 'activity_type', 'admin', 77],
+    ['tag_deep_work', 'deep_work', '深度工作', 'work_mode', null, 10],
+    ['tag_shallow_work', 'shallow_work', '浅层处理', 'work_mode', null, 20],
+    ['tag_creation', 'creation', '创造输出', 'work_mode', null, 30],
+    ['tag_input', 'input', '输入吸收', 'work_mode', null, 40],
+    ['tag_coordination', 'coordination', '协调推进', 'work_mode', null, 50],
     ['tag_high', 'high_value', '高价值', 'value_signal', null, 10],
     ['tag_maintenance', 'maintenance', '维护', 'value_signal', null, 20],
     ['tag_low_value', 'low_value', '低价值', 'value_signal', null, 30],
-    ['tag_focused', 'focused', '专注', 'state_signal', null, 10],
-    ['tag_tired', 'tired', '疲惫', 'state_signal', null, 20],
-    ['tag_interrupted', 'interrupted', '被打断', 'state_signal', null, 30],
-    ['tag_blocked', 'blocked', '卡住', 'state_signal', null, 40],
-    ['tag_low', 'low_quality', '低质量', 'state_signal', null, 50],
+    ['tag_state_good', 'state_good', '顺畅', 'state_signal', null, 10],
+    ['tag_state_normal', 'state_normal', '平稳推进', 'state_signal', null, 20],
+    ['tag_state_bad', 'state_bad', '分心', 'state_signal', null, 30],
+    ['tag_focused', 'focused', '专注', 'state_signal', null, 40],
+    ['tag_interrupted', 'interrupted', '被打断', 'state_signal', null, 50],
+    ['tag_blocked', 'blocked', '卡住', 'state_signal', null, 60],
+    ['tag_low', 'low_quality', '低质量', 'state_signal', null, 70],
+    ['tag_energy_high', 'energy_high', '精力足', 'energy_state', null, 10],
+    ['tag_energy_normal', 'energy_normal', '精力一般', 'energy_state', null, 20],
+    ['tag_tired', 'tired', '疲惫', 'energy_state', null, 30],
+    ['tag_mood_calm', 'mood_calm', '平静', 'mood_state', null, 10],
+    ['tag_mood_happy', 'mood_happy', '开心', 'mood_state', null, 20],
+    ['tag_mood_anxious', 'mood_anxious', '焦虑', 'mood_state', null, 30],
+    ['tag_mood_low', 'mood_low', '低落', 'mood_state', null, 40],
+    ['tag_home', 'home', '在家', 'environment', null, 10],
+    ['tag_office', 'office', '办公室', 'environment', null, 20],
+    ['tag_outside', 'outside', '户外', 'environment', null, 30],
+    ['tag_on_road', 'on_road', '路上', 'environment', null, 40],
     ['tag_health', 'health', '健康', 'life_area', null, 10],
     ['tag_growth', 'growth', '成长', 'life_area', null, 20],
     ['tag_relationship', 'relationship', '关系', 'life_area', null, 30],
@@ -838,124 +1433,6 @@ function seed() {
   }
   syncOpenTagSet(defaultTags);
   normalizeTagHierarchy();
-
-  if (get('SELECT COUNT(*) AS count FROM people').count === 0) {
-    run('INSERT INTO people (person_id, display_name, role, relationship_type, note) VALUES (?, ?, ?, ?, ?)', [
-      'person_you_zhengxin',
-      '游正新',
-      '老师',
-      'mentor',
-      '示例人物，可用多个称呼归一。',
-    ]);
-    [
-      ['alias_you_1', '游正新', 'real_name', 1],
-      ['alias_you_2', '游老师', 'title', 0],
-      ['alias_you_3', '正新', 'short_name', 0],
-    ].forEach(([aliasId, alias, type, primary]) => {
-      run('INSERT INTO person_aliases (alias_id, person_id, alias_text, alias_type, is_primary, confidence) VALUES (?, ?, ?, ?, ?, ?)', [
-        aliasId,
-        'person_you_zhengxin',
-        alias,
-        type,
-        primary,
-        1,
-      ]);
-    });
-  }
-
-  if (get('SELECT COUNT(*) AS count FROM goals').count === 0) {
-    const month = periodBounds('month', new Date());
-    const year = periodBounds('year', new Date());
-    run(
-      'INSERT INTO goals (goal_id, title, level, period_start, period_end, status, priority, success_criteria, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ['goal_year_001', '把个人数字化系统跑起来', 'year', year.start, year.end, 'active', 1, '持续记录、复盘，并让 AI 能主动提醒下一步。', now()],
-    );
-    run(
-      'INSERT INTO goals (goal_id, title, level, period_start, period_end, status, priority, success_criteria, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ['goal_month_001', '稳定记录 20 天', 'month', month.start, month.end, 'active', 2, '每天至少有一条 timeline，周末生成周报。', now()],
-    );
-  }
-
-  if (get('SELECT COUNT(*) AS count FROM tasks').count === 0) {
-    [
-      ['task_mock_1', 'T-20260528-001', '完成任务模块的交互', '新增任务页、状态切换和目标关联。', 'doing', 'goal_year_001', 1, addHours(8), ['work', 'code']],
-      ['task_mock_2', 'T-20260528-002', '同步 schema 文档', '把任务字段、状态历史和关系更新到文档里。', 'todo', 'goal_month_001', 2, addHours(30), ['writing', 'high_value']],
-      ['task_mock_3', 'T-20260528-003', '确认提醒规则', '决定哪些任务状态需要 AI 主动提醒。', 'blocked', 'goal_year_001', 3, addHours(54), ['meeting', 'high_value']],
-      ['task_mock_4', 'T-20260528-004', '整理 24h timeline 视图', '已完成首版日视图排版。', 'done', 'goal_month_001', 2, addHours(-6), ['work', 'code']],
-    ].forEach(([taskId, taskCode, title, description, status, goalId, priority, dueAt, tagKeys]) => {
-      run(
-        `INSERT INTO tasks
-          (task_id, task_code, title, description, status, goal_id, priority, due_at, created_at, status_updated_at, completed_at, outcome)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          taskId,
-          taskCode,
-          title,
-          description,
-          status,
-          goalId,
-          priority,
-          dueAt,
-          now(),
-          now(),
-          status === 'done' ? now() : null,
-          status === 'done' ? '首版可用。' : '',
-        ],
-      );
-      tagKeys.forEach((tagKey) => attachTag(taskId, tagKey));
-      recordTaskEvent(taskId, 'created', null, status, '初始化示例任务');
-    });
-  }
-
-  if (get('SELECT task_id FROM tasks WHERE task_id = ?', ['task_mock_1'])) {
-    run('UPDATE timeline_entries SET task_id = ? WHERE timeline_id = ? AND task_id IS NULL', ['task_mock_1', 'timeline_mock_4']);
-  }
-
-  if (get('SELECT COUNT(*) AS count FROM reminders').count === 0) {
-    run(
-      'INSERT INTO reminders (reminder_id, title, reminder_type, status, priority, reason, suggested_action, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      ['reminder_001', '今晚生成日报', 'review', 'pending', 2, '日报可以把今天的 timeline 汇总成事实回顾。', '生成今日简报', now()],
-    );
-  }
-
-  if (get('SELECT COUNT(*) AS count FROM habits').count === 0) {
-    [
-      ['habit_mock_1', '每天记录一句 timeline', 'daily', 1, 1, '保持低负担，只要一句话。', ['writing', 'review']],
-      ['habit_mock_2', '每周三次运动', 'weekly', 3, 2, '运动可以是健身、散步或跳舞。', ['exercise', 'high_value']],
-      ['habit_mock_3', '每晚 5 分钟复盘', 'daily', 1, 3, '睡前生成或阅读日报。', ['high_value']],
-    ].forEach(([habitIdValue, title, cadence, targetCount, priority, note, tagKeys]) => {
-      run(
-        'INSERT INTO habits (habit_id, title, cadence, target_count, status, priority, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [habitIdValue, title, cadence, targetCount, 'active', priority, note, now()],
-      );
-      tagKeys.forEach((tagKey) => attachTag(habitIdValue, tagKey));
-    });
-
-    run(
-      'INSERT INTO habit_logs (habit_id, local_date, status, quality, note, logged_at) VALUES (?, ?, ?, ?, ?, ?)',
-      ['habit_mock_1', today(), 'done', 4, '今天已经记录了系统架构 timeline。', now()],
-    );
-  }
-
-  if (get('SELECT COUNT(*) AS count FROM schedule_events').count === 0) {
-    [
-      ['schedule_mock_1', '和游老师复盘目标系统', addHours(26), addHours(27), 'planned', '线上', '确认目标 tag 和提醒规则。', ['meeting', 'high_value']],
-      ['schedule_mock_2', '周末跳舞', addHours(72), addHours(74), 'planned', '练习室', '作为爱好和运动习惯的一次记录。', ['dance', 'rest']],
-      ['schedule_mock_3', '生成本周周报', addHours(96), null, 'planned', '', '看目标、timeline、习惯是否对齐。', ['high_value']],
-    ].forEach(([eventId, title, startAt, endAt, status, location, note, tagKeys]) => {
-      run(
-        'INSERT INTO schedule_events (event_id, title, start_at, end_at, status, location, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [eventId, title, startAt, endAt, status, location, note, now()],
-      );
-      tagKeys.forEach((tagKey) => attachTag(eventId, tagKey));
-    });
-  }
-
-  seedMockRecords();
-
-  if (get('SELECT COUNT(*) AS count FROM reports').count === 0) {
-    generateReport('day');
-  }
 }
 
 function syncOpenTagSet(defaultTags) {
@@ -966,18 +1443,6 @@ function syncOpenTagSet(defaultTags) {
   ['tag_deep', 'tag_golf'].forEach((tagId) => {
     run('UPDATE tags SET is_active = 0 WHERE tag_id = ?', [tagId]);
   });
-}
-
-function createTimeline(title, inputId, tagKeys = ['work'], startAt = now(), endAt = null, isEstimated = 0) {
-  const timelineId = id('timeline');
-  run(
-    `INSERT INTO timeline_entries
-      (timeline_id, source_input_id, start_at, end_at, local_date, title, description, kind, quality, is_estimated)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [timelineId, inputId, startAt, endAt, today(startAt), cleanTitle(title), title, title.includes('休息') ? 'activity_block' : 'activity_block', null, isEstimated],
-  );
-  tagKeys.forEach((tagKey) => attachTag(timelineId, tagKey));
-  return timelineId;
 }
 
 function createTimelineFromSchedule({ title, startAt, endAt, location = '', note = '', taskId = null, tagRefs = [] }) {
@@ -1024,61 +1489,15 @@ function hasTimelineOverlap(startAt, endAt) {
   ).count > 0;
 }
 
-function closeOpenTimeline(note, inputId) {
-  const open = get('SELECT * FROM timeline_entries WHERE end_at IS NULL ORDER BY start_at DESC LIMIT 1');
-  if (!open) {
-    createTimeline(`完成：${cleanTitle(note)}`, inputId, ['work'], now(), now(), 1);
-    return;
-  }
-  run('UPDATE timeline_entries SET end_at = ?, description = ? WHERE timeline_id = ?', [
-    now(),
-    `${open.description || open.title}。${note}`,
-    open.timeline_id,
-  ]);
-}
-
-function createMoment(text, inputId) {
-  run(
-    `INSERT INTO moments
-      (moment_id, source_input_id, happened_at, local_date, title, story, importance)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [id('moment'), inputId, now(), today(), cleanTitle(text), text, 4],
-  );
-}
-
-function detectAction(text) {
-  const historic = text.match(/(\d{1,2})\s*[点:]\s*(?:到|-)\s*(\d{1,2})\s*[点:]?\s*(.+)/);
-  if (historic) {
-    const startAt = atHour(Number(historic[1]));
-    const endAt = atHour(Number(historic[2]));
-    return { type: 'historic', title: historic[3], startAt, endAt };
-  }
-
-  if (/休息|吃饭|睡觉|路上/.test(text)) return { type: 'rest', title: cleanTitle(text) };
-  if (/做完|写完|结束|先到这里|完成/.test(text)) return { type: 'finish', title: cleanTitle(text) };
-  if (/切到|接下来|换成/.test(text)) return { type: 'switch', title: cleanTitle(text) };
-
-  const tags = [];
-  if (/音乐|乐器|吉他|钢琴|唱/.test(text)) tags.push('instruments');
-  if (/跳舞|舞蹈/.test(text)) tags.push('dance');
-  if (/高尔夫|golf/i.test(text)) tags.push('hobby');
-  if (/写|文档|schema|方案/.test(text)) tags.push('writing', 'docs');
-  if (!tags.length) tags.push('work');
-
-  return { type: 'start', title: cleanTitle(text), tags };
-}
-
-function cleanTitle(text) {
-  return text
-    .replace(/我开始|开始|我先|先|现在|接下来|切到|换成|做完了|写完了|做完|写完|休息一下|记成高光|高光/g, '')
-    .replace(/[。,.，]/g, ' ')
-    .trim()
-    .slice(0, 42) || '未命名记录';
-}
-
 function attachTag(recordId, tagRef) {
   const tag = tagByRef(tagRef);
   if (!tag) return;
+  run(
+    `DELETE FROM record_tags
+     WHERE record_id = ?
+       AND tag_id IN (SELECT tag_id FROM tags WHERE category = ?)`,
+    [recordId, tag.category],
+  );
   run('INSERT OR IGNORE INTO record_tags (record_id, tag_id) VALUES (?, ?)', [recordId, tag.tag_id]);
 }
 
@@ -1087,8 +1506,480 @@ function replaceTags(recordId, tagRefs) {
   tagRefs.forEach((tagRef) => attachTag(recordId, tagRef));
 }
 
+function replacePersonAliases(personId, aliases = []) {
+  const normalizedAliases = [...new Set(aliases
+    .map((alias) => (typeof alias === 'string' ? { text: alias } : alias))
+    .map((alias) => ({
+      text: String(alias.text || alias.alias || alias.alias_text || '').trim(),
+      type: alias.type || alias.aliasType || alias.alias_type || 'alias',
+      primary: alias.primary ?? alias.isPrimary ?? alias.is_primary ?? 0,
+      confidence: Number(alias.confidence ?? 1),
+    }))
+    .filter((alias) => alias.text)
+    .map((alias) => JSON.stringify(alias)))]
+    .map((alias) => JSON.parse(alias));
+
+  run('DELETE FROM person_aliases WHERE person_id = ?', [personId]);
+  normalizedAliases.forEach((alias, index) => {
+    run(
+      'INSERT INTO person_aliases (alias_id, person_id, alias_text, alias_type, is_primary, confidence) VALUES (?, ?, ?, ?, ?, ?)',
+      [
+        id('alias'),
+        personId,
+        alias.text,
+        alias.type,
+        alias.primary || index === 0 ? 1 : 0,
+        alias.confidence,
+      ],
+    );
+  });
+}
+
+function replacePersonLinks(recordType, recordId, personRefs = []) {
+  run('DELETE FROM person_record_links WHERE record_type = ? AND record_id = ?', [recordType, recordId]);
+  personRefs
+    .map((ref) => normalizePersonLink(ref))
+    .filter((link) => link.personId && get('SELECT person_id FROM people WHERE person_id = ?', [link.personId]))
+    .forEach((link) => {
+      run(
+        `INSERT OR REPLACE INTO person_record_links
+          (person_id, record_type, record_id, role, mention_text, confidence, note, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [link.personId, recordType, recordId, link.role, link.mentionText, link.confidence, link.note, now()],
+      );
+    });
+}
+
+function normalizePersonLink(ref) {
+  if (typeof ref === 'string') {
+    return { personId: ref, role: 'participant', mentionText: '', confidence: 1, note: '' };
+  }
+  return {
+    personId: ref.personId || ref.person_id || ref.personRef || ref.person_ref || ref.id || '',
+    role: ref.role || 'participant',
+    mentionText: ref.mentionText || ref.mention_text || ref.alias || '',
+    confidence: Number(ref.confidence ?? 1),
+    note: ref.note || '',
+  };
+}
+
+function personRefsFromPayload(payload = {}) {
+  const refs = payload.personIds
+    ?? payload.person_ids
+    ?? payload.personRefs
+    ?? payload.person_refs
+    ?? payload.people
+    ?? [];
+  return Array.isArray(refs) ? refs : [refs];
+}
+
+function hasPersonLinksPayload(payload = {}) {
+  return ['personIds', 'person_ids', 'personRefs', 'person_refs', 'people'].some((key) => key in payload);
+}
+
+function personRelatedRecords(personId) {
+  return all(
+    `SELECT *
+     FROM person_record_links
+     WHERE person_id = ?
+     ORDER BY created_at DESC`,
+    [personId],
+  ).map((link) => personRelatedRecord(link)).filter(Boolean);
+}
+
+function personRelatedRecord(link) {
+  const record = readLinkedRecord(link.record_type, link.record_id);
+  if (!record) return null;
+  return {
+    ...record,
+    relationRole: link.role || '',
+    relationMention: link.mention_text || '',
+    relationConfidence: link.confidence ?? null,
+    relationNote: link.note || '',
+  };
+}
+
+function readLinkedRecord(type, recordId) {
+  if (type === 'timeline') {
+    const item = get(
+      `SELECT timeline_entries.*, tasks.title AS task_title, tasks.task_code
+       FROM timeline_entries
+       LEFT JOIN tasks ON tasks.task_id = timeline_entries.task_id
+       WHERE timeline_entries.timeline_id = ?`,
+      [recordId],
+    );
+    return item && {
+      id: `timeline:${item.timeline_id}`,
+      source: 'timeline',
+      sourceLabel: '时间线',
+      date: item.start_at || item.local_date,
+      title: item.title,
+      body: item.description,
+      meta: [item.task_code, item.task_title].filter(Boolean).join(' · '),
+    };
+  }
+  if (type === 'task') {
+    const task = get(
+      `SELECT tasks.*, goals.title AS goal_title
+       FROM tasks
+       LEFT JOIN goals ON goals.goal_id = tasks.goal_id
+       WHERE tasks.task_id = ?`,
+      [recordId],
+    );
+    return task && {
+      id: `task:${task.task_id}`,
+      source: 'task',
+      sourceLabel: '任务',
+      date: task.completed_at || task.status_updated_at || task.created_at,
+      title: task.title,
+      body: task.description,
+      meta: [task.task_code, task.status, task.goal_title].filter(Boolean).join(' · '),
+    };
+  }
+  if (type === 'schedule') {
+    const event = get('SELECT * FROM schedule_events WHERE event_id = ?', [recordId]);
+    return event && {
+      id: `schedule:${event.event_id}`,
+      source: 'schedule',
+      sourceLabel: '日程',
+      date: event.start_at,
+      title: event.title,
+      body: [event.location, event.note].filter(Boolean).join(' · '),
+      meta: event.status,
+    };
+  }
+  if (type === 'moment') {
+    const moment = get(
+      `SELECT moments.*, timeline_entries.title AS timeline_title
+       FROM moments
+       LEFT JOIN timeline_entries ON timeline_entries.timeline_id = moments.timeline_id
+       WHERE moments.moment_id = ?`,
+      [recordId],
+    );
+    return moment && {
+      id: `moment:${moment.moment_id}`,
+      source: 'moment',
+      sourceLabel: '高光',
+      date: moment.happened_at || moment.local_date,
+      title: moment.title,
+      body: moment.story,
+      meta: moment.timeline_title ? `来自：${moment.timeline_title}` : '',
+    };
+  }
+  if (type === 'review') {
+    const review = get('SELECT * FROM reviews WHERE review_id = ?', [recordId]);
+    return review && {
+      id: `review:${review.review_id}`,
+      source: 'review',
+      sourceLabel: '复盘',
+      date: review.created_at || review.period_end,
+      title: review.title,
+      body: review.summary,
+      meta: review.review_type,
+    };
+  }
+  if (type === 'goal') {
+    const goal = get('SELECT * FROM goals WHERE goal_id = ?', [recordId]);
+    return goal && {
+      id: `goal:${goal.goal_id}`,
+      source: 'goal',
+      sourceLabel: '目标',
+      date: goal.period_end || goal.created_at,
+      title: goal.title,
+      body: goal.success_criteria,
+      meta: goal.level,
+    };
+  }
+  if (type === 'habit') {
+    const habit = get('SELECT * FROM habits WHERE habit_id = ?', [recordId]);
+    return habit && {
+      id: `habit:${habit.habit_id}`,
+      source: 'habit',
+      sourceLabel: '习惯',
+      date: habit.created_at,
+      title: habit.title,
+      body: habit.note,
+      meta: habit.status,
+    };
+  }
+  if (type === 'reminder') {
+    const reminder = get('SELECT * FROM reminders WHERE reminder_id = ?', [recordId]);
+    return reminder && {
+      id: `reminder:${reminder.reminder_id}`,
+      source: 'reminder',
+      sourceLabel: '提醒',
+      date: reminder.created_at,
+      title: reminder.title,
+      body: reminder.reason,
+      meta: reminder.status,
+    };
+  }
+  return null;
+}
+
+function createSourceInputRecord(payload = {}) {
+  const rawText = String(payload.rawText || payload.raw_text || payload.text || '').trim();
+  if (!rawText) return null;
+  const inputId = id('input');
+  run(
+    'INSERT INTO source_inputs (input_id, happened_at, channel, raw_text, author) VALUES (?, ?, ?, ?, ?)',
+    [
+      inputId,
+      payload.happenedAt || payload.happened_at || now(),
+      payload.channel || 'openclaw',
+      rawText,
+      payload.author || 'user',
+    ],
+  );
+  return inputId;
+}
+
+function withCreated(created) {
+  return {
+    ...dashboard(),
+    created,
+  };
+}
+
+function applyOpenClawOperation(operation = {}, refs, sourceInputId) {
+  const entity = normalizeOperationEntity(operation.entity || operation.type);
+  const action = operation.action || (entity === 'habit_log' ? 'log' : 'create');
+  const data = resolveOperationData(operation.data || operation.payload || {}, refs);
+
+  if (sourceInputId && ['timeline', 'moment'].includes(entity) && !data.sourceInputId && !data.source_input_id) {
+    data.sourceInputId = sourceInputId;
+  }
+
+  if (action === 'create') {
+    const result = createByEntity(entity, data);
+    return { action, entity, ref: operation.ref || '', created: result.created || null };
+  }
+
+  if (action === 'update') {
+    updateByEntity(entity, resolveOperationTarget(operation, data, refs), data);
+    return { action, entity, ref: operation.ref || '', targetId: resolveOperationTarget(operation, data, refs) };
+  }
+
+  if (action === 'log' && entity === 'habit_log') {
+    const habitId = resolveOperationTarget(operation, data, refs) || data.habitId || data.habit_id;
+    const result = logHabit(habitId, data);
+    return { action, entity, ref: operation.ref || '', created: result.created || null };
+  }
+
+  throw new Error(`Unsupported OpenClaw operation: ${action} ${entity}`);
+}
+
+function createByEntity(entity, data) {
+  if (entity === 'source_input') return createSourceInput(data);
+  if (entity === 'timeline') return createTimelineEntry(data);
+  if (entity === 'moment') return createMoment(data);
+  if (entity === 'person') return createPerson(data);
+  if (entity === 'goal') return createGoal(data);
+  if (entity === 'task') return createTask(data);
+  if (entity === 'tag') return createTag(data);
+  if (entity === 'habit') return createHabit(data);
+  if (entity === 'schedule') return createScheduleEvent(data);
+  if (entity === 'reminder') return createReminder(data);
+  if (entity === 'review') return createReview(data);
+  throw new Error(`Unsupported OpenClaw create entity: ${entity}`);
+}
+
+function updateByEntity(entity, targetId, data) {
+  if (!targetId) throw new Error(`Missing target id for ${entity} update`);
+  if (entity === 'timeline') return updateTimeline(targetId, data);
+  if (entity === 'moment') return updateMoment(targetId, data);
+  if (entity === 'person') return updatePerson(targetId, data);
+  if (entity === 'goal') return updateGoal(targetId, data);
+  if (entity === 'task') return updateTask(targetId, data);
+  if (entity === 'tag') return updateTag(targetId, data);
+  if (entity === 'habit') return updateHabit(targetId, data);
+  if (entity === 'schedule') return updateScheduleEvent(targetId, data);
+  if (entity === 'reminder') return updateReminder(targetId, data);
+  if (entity === 'review') return updateReview(targetId, data);
+  throw new Error(`Unsupported OpenClaw update entity: ${entity}`);
+}
+
+function resolveOperationTarget(operation, data, refs) {
+  return resolveRefValue(
+    operation.targetId
+      || operation.target_id
+      || operation.id
+      || data.targetId
+      || data.target_id
+      || data.id
+      || data.goalId
+      || data.goal_id
+      || data.taskId
+      || data.task_id
+      || data.habitId
+      || data.habit_id
+      || data.timelineId
+      || data.timeline_id
+      || data.momentId
+      || data.moment_id
+      || data.personId
+      || data.person_id
+      || data.eventId
+      || data.event_id
+      || data.reminderId
+      || data.reminder_id
+      || data.reviewId
+      || data.review_id,
+    refs,
+  );
+}
+
+function resolveOperationData(data, refs) {
+  const resolved = resolveRefs(data, refs);
+  const refFields = {
+    sourceInputRef: 'sourceInputId',
+    source_input_ref: 'source_input_id',
+    timelineRef: 'timelineId',
+    timeline_ref: 'timeline_id',
+    taskRef: 'taskId',
+    task_ref: 'task_id',
+    goalRef: 'goalId',
+    goal_ref: 'goal_id',
+    habitRef: 'habitId',
+    habit_ref: 'habit_id',
+    momentRef: 'momentId',
+    moment_ref: 'moment_id',
+    personRef: 'personId',
+    person_ref: 'person_id',
+    eventRef: 'eventId',
+    event_ref: 'event_id',
+    reminderRef: 'reminderId',
+    reminder_ref: 'reminder_id',
+    reviewRef: 'reviewId',
+    review_ref: 'review_id',
+  };
+
+  Object.entries(refFields).forEach(([from, to]) => {
+    if (resolved[from]) {
+      resolved[to] = resolveRefValue(resolved[from], refs);
+      delete resolved[from];
+    }
+  });
+  return resolved;
+}
+
+function resolveRefs(value, refs) {
+  if (Array.isArray(value)) return value.map((item) => resolveRefs(item, refs));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveRefs(item, refs)]));
+  }
+  return resolveRefValue(value, refs);
+}
+
+function resolveRefValue(value, refs) {
+  if (typeof value !== 'string') return value;
+  if (refs.has(value)) return refs.get(value);
+  if (value.startsWith('$') && refs.has(value.slice(1))) return refs.get(value.slice(1));
+  return value;
+}
+
+function addCreatedRefs(ref, created, refs) {
+  Object.entries(created).forEach(([key, value]) => {
+    if (!value) return;
+    refs.set(`${ref}.${key}`, value);
+    refs.set(`$${ref}.${key}`, value);
+  });
+
+  const primary = created.timelineId
+    || created.taskId
+    || created.goalId
+    || created.momentId
+    || created.personId
+    || created.habitId
+    || created.eventId
+    || created.reminderId
+    || created.reviewId
+    || created.tagId
+    || created.inputId
+    || created.sourceInputId;
+  if (primary) {
+    refs.set(ref, primary);
+    refs.set(`$${ref}`, primary);
+  }
+}
+
+function normalizeOperationEntity(entity) {
+  const normalized = String(entity || '').trim();
+  const aliases = {
+    source: 'source_input',
+    sourceInput: 'source_input',
+    source_input: 'source_input',
+    timeline_entry: 'timeline',
+    schedule_event: 'schedule',
+    event: 'schedule',
+    habitLog: 'habit_log',
+    habit_log: 'habit_log',
+  };
+  return aliases[normalized] || normalized;
+}
+
+function normalizeRecordTagCategories() {
+  run(`
+    DELETE FROM record_tags
+    WHERE rowid NOT IN (
+      SELECT rowid
+      FROM (
+        SELECT
+          record_tags.rowid,
+          ROW_NUMBER() OVER (
+            PARTITION BY record_tags.record_id, tags.category
+            ORDER BY
+              tags.parent_tag_id IS NOT NULL DESC,
+              tags.sort_order DESC,
+              tags.name DESC
+          ) AS rn
+        FROM record_tags
+        JOIN tags ON tags.tag_id = record_tags.tag_id
+      )
+      WHERE rn = 1
+    )
+  `);
+}
+
 function normalizeTaskStatus(status) {
   return ['todo', 'doing', 'blocked', 'done', 'abandoned', 'deleted'].includes(status) ? status : 'todo';
+}
+
+function normalizeGoalLevel(level) {
+  return ['day', 'week', 'month', 'year'].includes(level) ? level : 'month';
+}
+
+function normalizeGoalStatus(status) {
+  return ['active', 'done', 'not_done', 'abandoned', 'deleted'].includes(status) ? status : 'active';
+}
+
+function normalizeHabitStatus(status) {
+  return ['active', 'archived', 'deleted'].includes(status) ? status : 'active';
+}
+
+function normalizeTimelineKind(kind) {
+  return ['activity_block', 'state_event', 'gap', 'note', 'schedule_event'].includes(kind) ? kind : 'activity_block';
+}
+
+function normalizeImportance(value) {
+  const number = Number(value ?? 3);
+  if (Number.isNaN(number)) return 3;
+  return Math.min(5, Math.max(1, Math.round(number)));
+}
+
+function normalizeReminderStatus(status) {
+  return ['pending', 'reminded', 'done', 'ignored', 'snoozed'].includes(status) ? status : 'pending';
+}
+
+function normalizeReviewType(type) {
+  return ['day', 'week', 'month', 'topic'].includes(type) ? type : 'topic';
+}
+
+function archiveExpiredGoals() {
+  run(
+    "UPDATE goals SET status = 'not_done' WHERE status = 'active' AND period_end < ?",
+    [today()],
+  );
 }
 
 function recordTaskEvent(taskId, eventType, fromStatus, toStatus, note = '', inputId = null) {
@@ -1119,7 +2010,8 @@ function normalizeTagKey(value) {
 function normalizeTagCategory(value) {
   const category = String(value || '').trim();
   if (['hobby', 'hobbies', 'interest', 'interests', '爱好', '兴趣爱好'].includes(category)) return 'activity_type';
-  if (['activity_type', 'work_mode', 'value_signal', 'state_signal', 'life_area'].includes(category)) return category;
+  if (['生活领域'].includes(category)) return 'life_area';
+  if (['activity_type', 'work_mode', 'value_signal', 'state_signal', 'energy_state', 'mood_state', 'environment', 'life_area'].includes(category)) return category;
   return 'activity_type';
 }
 
@@ -1159,9 +2051,15 @@ function normalizeTagHierarchy() {
   `);
   run("UPDATE tags SET category = 'activity_type', parent_tag_key = NULL WHERE tag_key = 'hobby'");
   run("UPDATE tags SET category = 'activity_type', parent_tag_key = 'work' WHERE tag_key = 'writing' AND parent_tag_key IS NULL");
-  run("UPDATE tags SET parent_tag_key = 'work' WHERE category = 'work_mode' AND parent_tag_key IS NULL");
   run("UPDATE tags SET category = 'activity_type', parent_tag_key = 'hobby' WHERE tag_key IN ('music', 'dance', 'golf') AND parent_tag_key IS NULL");
+  run("UPDATE tags SET category = 'life_area', parent_tag_key = NULL WHERE tag_key IN ('health', 'growth', 'relationship', 'finance', 'life')");
+  run("UPDATE tags SET category = 'energy_state', parent_tag_key = NULL WHERE tag_key = 'tired'");
+  run("UPDATE tags SET name = '顺畅' WHERE tag_key = 'state_good'");
+  run("UPDATE tags SET name = '平稳推进' WHERE tag_key = 'state_normal'");
+  run("UPDATE tags SET name = '分心' WHERE tag_key = 'state_bad'");
+  run("UPDATE tags SET parent_tag_id = NULL, parent_tag_key = NULL WHERE category <> 'activity_type'");
   syncParentTagIds();
+  normalizeRecordTagCategories();
 }
 
 function syncParentTagIds() {
@@ -1232,61 +2130,6 @@ function goalProgress(goal) {
   return Math.min(100, Math.max(8, taggedTimeline * 18 + (goal.level === 'year' ? 24 : 12)));
 }
 
-function seedMockRecords() {
-  attachTag('goal_year_001', 'high_value');
-  attachTag('goal_year_001', 'code');
-  attachTag('goal_month_001', 'writing');
-  attachTag('goal_month_001', 'review');
-
-  if (!get('SELECT goal_id FROM goals WHERE goal_id = ?', ['goal_health_001'])) {
-    const month = periodBounds('month', new Date());
-    run(
-      'INSERT INTO goals (goal_id, title, level, period_start, period_end, status, priority, success_criteria, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ['goal_health_001', '把身体状态拉回稳定区间', 'month', month.start, month.end, 'active', 3, '每周 3 次运动，至少一次户外活动。', now()],
-    );
-    attachTag('goal_health_001', 'exercise');
-    attachTag('goal_health_001', 'high_value');
-  }
-
-  if (get('SELECT COUNT(*) AS count FROM timeline_entries').count > 0) return;
-
-  const inputId = 'input_mock_today';
-  run(
-    'INSERT OR IGNORE INTO source_inputs (input_id, happened_at, channel, raw_text, author) VALUES (?, ?, ?, ?, ?)',
-    [inputId, atHour(9), 'chat', '今天上午先写个人数字化系统的信息架构，然后和游老师聊了一下目标。下午跳舞放松。', 'user'],
-  );
-
-  const samples = [
-    ['timeline_mock_1', atHour(9), atHour(10.5), '梳理个人数字化系统架构', '确定目标、timeline、报告和提醒的关系。', 4, ['writing', 'docs', 'high_value']],
-    ['timeline_mock_2', atHour(10.75), atHour(11.5), '和游老师讨论目标系统', '确认目标可以有 tag，人物用 alias 归一。', 5, ['meeting', 'high_value']],
-    ['timeline_mock_3', atHour(14), atHour(15.25), '跳舞', '休息和身体活动，不挂任务，只作为 hobby timeline。', 4, ['dance', 'rest']],
-    ['timeline_mock_4', atHour(16), null, '改 React 工作台交互', '减少首页元素，做目标和 timeline 编辑入口。', null, ['work', 'code']],
-  ];
-
-  samples.forEach(([timelineId, startAt, endAt, title, description, quality, tagKeys]) => {
-    run(
-      `INSERT INTO timeline_entries
-        (timeline_id, source_input_id, start_at, end_at, local_date, title, description, kind, task_id, quality, is_estimated)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [timelineId, inputId, startAt, endAt, today(startAt), title, description, 'activity_block', timelineId === 'timeline_mock_4' ? 'task_mock_1' : null, quality, 0],
-    );
-    tagKeys.forEach((tagKey) => attachTag(timelineId, tagKey));
-  });
-
-  run(
-    `INSERT OR IGNORE INTO moments
-      (moment_id, source_input_id, happened_at, local_date, title, story, importance, timeline_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ['moment_mock_1', inputId, atHour(11.5), today(), '确认系统主线', '目标决定方向，timeline 证明真实投入。', 5, 'timeline_mock_2'],
-  );
-}
-
-function suggestion(timeline, goals) {
-  if (timeline.some((item) => !item.end_at)) return '当前 timeline 正在记录，结束或切换时直接在聊天框说明即可。';
-  if (!goals.length) return '先写一个月度目标，再让 timeline 去证明它有没有推进。';
-  return '从一句自然语言开始：我开始做 xxx。';
-}
-
 function metrics(timeline) {
   let trackedMs = 0;
   let qualityTotal = 0;
@@ -1313,10 +2156,25 @@ function metrics(timeline) {
   };
 }
 
+function topTagNames(category) {
+  return all(
+    `SELECT tags.name, COUNT(*) AS count
+     FROM record_tags
+     JOIN tags ON tags.tag_id = record_tags.tag_id
+     WHERE tags.category = ?
+       AND tags.is_active = 1
+     GROUP BY tags.tag_id
+     ORDER BY count DESC, tags.sort_order ASC, tags.name ASC
+     LIMIT 4`,
+    [category],
+  ).map((row) => row.name);
+}
+
 function periodBounds(level, date) {
   const year = date.getFullYear();
   const month = date.getMonth();
 
+  if (level === 'day') return { start: today(date), end: today(date) };
   if (level === 'year') return { start: `${year}-01-01`, end: `${year}-12-31` };
   if (level === 'week') {
     const start = new Date(date);
@@ -1332,24 +2190,28 @@ function periodBounds(level, date) {
   };
 }
 
-function atHour(hour) {
-  const date = new Date();
-  const wholeHour = Math.floor(hour);
-  const minutes = Math.round((hour - wholeHour) * 60);
-  date.setHours(wholeHour, minutes, 0, 0);
-  return date.toISOString();
-}
+function completedReportPeriodBounds(type, date) {
+  if (type === 'month') {
+    const lastMonth = new Date(date.getFullYear(), date.getMonth() - 1, 1);
+    return {
+      start: today(lastMonth),
+      end: today(new Date(lastMonth.getFullYear(), lastMonth.getMonth() + 1, 0)),
+    };
+  }
 
-function addHours(hours) {
-  const date = new Date();
-  date.setHours(date.getHours() + hours);
-  return date.toISOString();
-}
+  if (type === 'week') {
+    const currentWeek = periodBounds('week', date);
+    const currentStart = new Date(`${currentWeek.start}T00:00:00`);
+    const start = new Date(currentStart);
+    start.setDate(currentStart.getDate() - 7);
+    const end = new Date(currentStart);
+    end.setDate(currentStart.getDate() - 1);
+    return { start: today(start), end: today(end) };
+  }
 
-function daysAgo(days) {
-  const date = new Date();
-  date.setDate(date.getDate() - days);
-  return today(date);
+  const yesterday = new Date(date);
+  yesterday.setDate(date.getDate() - 1);
+  return { start: today(yesterday), end: today(yesterday) };
 }
 
 function today(value = new Date()) {
