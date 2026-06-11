@@ -2457,7 +2457,7 @@ function ScheduleRow({ event }) {
 }
 
 function DayTimeline({ items, selectedDate, onEdit, full = false }) {
-  const height = full ? 1180 : 650;
+  const height = full ? 2400 : 1440;
   const sortedItems = [...items].sort((a, b) => new Date(a.start_at) - new Date(b.start_at));
   const timelineEvents = layoutDayEvents(sortedItems, height, full, selectedDate);
   const hours = Array.from({ length: 13 }, (_, index) => index * 2);
@@ -2483,27 +2483,40 @@ function DayTimeline({ items, selectedDate, onEdit, full = false }) {
 
       {!sortedItems.length ? <div className="day-empty">这一天还没有时间线记录。</div> : null}
 
-      {timelineEvents.items.map(({ item, top, height: eventHeight, isShort }) => {
+      {timelineEvents.items.map(({ item, top, height: eventHeight, isShort, showTitle, showDetails }) => {
         const visibleTags = full ? item.tags : [];
+        const displayType = timelineDisplayType(item);
+        const className = [
+          item.end_at ? 'day-event' : 'day-event live',
+          `type-${displayType}`,
+          isShort ? 'short' : '',
+          showTitle ? '' : 'compact',
+        ].filter(Boolean).join(' ');
 
         return (
           <button
             type="button"
-            className={`${item.end_at ? 'day-event' : 'day-event live'}${isShort ? ' short' : ''}`}
+            className={className}
             style={{ top: `${top}px`, height: `${eventHeight}px` }}
             key={item.timeline_id}
+            aria-label={`${formatTime(item.start_at)} - ${item.end_at ? formatTime(item.end_at) : '现在'} ${item.title}`}
+            title={`${formatTime(item.start_at)} - ${item.end_at ? formatTime(item.end_at) : '现在'} ${item.title}`}
             onClick={() => onEdit(item)}
           >
-            <span className="day-event-time">
-              {formatTime(item.start_at)} - {item.end_at ? formatTime(item.end_at) : '现在'}
-            </span>
-            <div className="row-title">
-              <strong>{item.title}</strong>
-              <Edit3 size={14} />
-            </div>
-            {full && item.task_code ? <span className="day-event-link">{item.task_code} · {item.task_title}</span> : null}
-            {full ? <p>{item.description}</p> : null}
-            <TagPills tags={visibleTags} quality={full ? item.quality : null} />
+            {showDetails ? (
+              <span className="day-event-time">
+                {formatTime(item.start_at)} - {item.end_at ? formatTime(item.end_at) : '现在'}
+              </span>
+            ) : null}
+            {showTitle ? (
+              <div className="row-title">
+                <strong>{item.title}</strong>
+                <Edit3 size={14} />
+              </div>
+            ) : null}
+            {full && showDetails && item.task_code ? <span className="day-event-link">{item.task_code} · {item.task_title}</span> : null}
+            {full && showDetails ? <p>{item.description}</p> : null}
+            {showDetails ? <TagPills tags={visibleTags} quality={full ? item.quality : null} /> : null}
           </button>
         );
       })}
@@ -2512,8 +2525,9 @@ function DayTimeline({ items, selectedDate, onEdit, full = false }) {
 }
 
 function GoalCard({ goal, onEdit, onStatus, onDelete, compact = false }) {
+  const showProgress = shouldShowGoalProgress(goal);
   return (
-    <article className={compact ? 'goal-card compact' : 'goal-card'}>
+    <article className={['goal-card', compact ? 'compact' : '', showProgress ? '' : 'no-progress'].filter(Boolean).join(' ')}>
       <div className="goal-topline">
         <span>{levelLabels[goal.level] || goal.level}</span>
         <em>{formatGoalPeriod(goal)}</em>
@@ -2522,16 +2536,19 @@ function GoalCard({ goal, onEdit, onStatus, onDelete, compact = false }) {
       <strong title={goal.title}>{goal.title}</strong>
       <p title={goal.success_criteria || '还没有成功标准'}>{goal.success_criteria || '还没有成功标准'}</p>
       <TagPills tags={goal.tags} />
-      <div className="progress-track">
-        <i style={{ width: `${goal.progress || 12}%` }} />
-      </div>
+      {showProgress ? (
+        <div className="progress-track">
+          <i style={{ width: `${goal.progress || 12}%` }} />
+        </div>
+      ) : null}
     </article>
   );
 }
 
 function GoalFocusRow({ goal, onEdit, onStatus, onDelete }) {
+  const showProgress = shouldShowGoalProgress(goal);
   return (
-    <article className="goal-focus-row">
+    <article className={showProgress ? 'goal-focus-row' : 'goal-focus-row no-progress'}>
       <div className="goal-focus-row-main">
         <div className="goal-focus-row-title">
           <strong title={goal.title}>{goal.title}</strong>
@@ -2540,9 +2557,11 @@ function GoalFocusRow({ goal, onEdit, onStatus, onDelete }) {
         <p title={goal.success_criteria || '还没有成功标准'}>{goal.success_criteria || '还没有成功标准'}</p>
         <TagPills tags={goal.tags} />
       </div>
-      <div className="progress-track">
-        <i style={{ width: `${goal.progress || 12}%` }} />
-      </div>
+      {showProgress ? (
+        <div className="progress-track">
+          <i style={{ width: `${goal.progress || 12}%` }} />
+        </div>
+      ) : null}
       <GoalActions goal={goal} onEdit={onEdit} onStatus={onStatus} onDelete={onDelete} />
     </article>
   );
@@ -2550,8 +2569,9 @@ function GoalFocusRow({ goal, onEdit, onStatus, onDelete }) {
 
 function GoalArchiveRow({ goal, onEdit, onStatus, onDelete }) {
   const archiveStatus = goalArchiveStatus(goal);
+  const showProgress = shouldShowGoalProgress(goal);
   return (
-    <article className={`goal-archive-row ${archiveStatus}`}>
+    <article className={`goal-archive-row ${archiveStatus}${showProgress ? '' : ' no-progress'}`}>
       <div className="goal-archive-main">
         <div className="goal-archive-title">
           <span>{levelLabels[goal.level] || goal.level}</span>
@@ -2564,12 +2584,18 @@ function GoalArchiveRow({ goal, onEdit, onStatus, onDelete }) {
         </div>
         <TagPills tags={goal.tags} />
       </div>
-      <div className="progress-track">
-        <i style={{ width: `${goal.progress || 12}%` }} />
-      </div>
+      {showProgress ? (
+        <div className="progress-track">
+          <i style={{ width: `${goal.progress || 12}%` }} />
+        </div>
+      ) : null}
       <GoalActions goal={goal} onEdit={onEdit} onStatus={onStatus} onDelete={onDelete} />
     </article>
   );
+}
+
+function shouldShowGoalProgress(goal) {
+  return goal.level !== 'day';
 }
 
 function GoalActions({ goal, onEdit, onStatus, onDelete }) {
@@ -2800,11 +2826,18 @@ function TagPicker({ tags, selected, onChange }) {
               {parents.map((tag) => {
                 const children = tree.childrenByParent[tag.tag_id] || [];
                 const open = expandedParent?.tag_id === tag.tag_id;
+                const selected = selectedSet.has(tag.tag_id);
+                const childSelected = children.some((child) => selectedSet.has(child.tag_id));
+                const chipClassName = [
+                  'tag-chip',
+                  selected ? 'selected' : '',
+                  childSelected ? 'child-active' : '',
+                ].filter(Boolean).join(' ');
                 return (
                   <div className={open ? 'tag-parent-block open' : 'tag-parent-block'} key={tag.tag_id}>
                     <button
                       type="button"
-                      className={selected.includes(tag.tag_id) ? 'tag-chip selected' : 'tag-chip'}
+                      className={chipClassName}
                       onClick={() => {
                         chooseTag(tag);
                         if (children.length) {
@@ -2986,9 +3019,7 @@ function buildCalendarDays(monthDate) {
 
 function layoutDayEvents(items, height, full) {
   const now = new Date();
-  const minHeight = full ? 86 : 58;
-  const gap = full ? 10 : 8;
-  let bottom = -gap;
+  const minHeight = full ? 24 : 10;
 
   const laidOutItems = items.map((item) => {
     const start = clampMinute(minutesOfDay(item.start_at));
@@ -2997,23 +3028,162 @@ function layoutDayEvents(items, height, full) {
 
     const duration = end - start;
     const naturalHeight = Math.max((duration / 1440) * height, minHeight);
-    const actualTop = (start / 1440) * height;
-    const top = Math.max(actualTop, bottom + gap);
-
-    bottom = top + naturalHeight;
+    const showTitle = full ? naturalHeight >= 22 : naturalHeight >= 42;
+    const showDetails = full ? naturalHeight >= 68 : false;
 
     return {
       item,
-      top,
+      top: (start / 1440) * height,
       height: naturalHeight,
       isShort: duration < 45,
+      showTitle,
+      showDetails,
     };
   });
 
   return {
     items: laidOutItems,
-    trackHeight: Math.max(height, bottom),
+    trackHeight: height,
   };
+}
+
+function timelineDisplayType(item) {
+  const titleDisplayType = timelineDisplayTypeFromText(item.title, ['health', 'meal', 'rest', 'commute']);
+  if (titleDisplayType) return titleDisplayType;
+
+  const tagDisplayType = timelineDisplayTypeFromTags(item);
+  if (tagDisplayType) return tagDisplayType;
+
+  return timelineDisplayTypeFromText([
+    item.kind,
+    item.title,
+    item.description,
+    ...(item.tags || []),
+  ].filter(Boolean).join(' ')) || 'activity';
+}
+
+function timelineDisplayTypeFromText(value, allowedTypes = null) {
+  const haystack = String(value || '').toLowerCase();
+  if (matchesAny(haystack, ['健身', '运动', 'workout', 'training'])) return 'health';
+  if (matchesAny(haystack, ['饭', '早餐', '午餐', '晚餐', '吃', 'meal', 'food'])) return 'meal';
+  if (matchesAny(haystack, ['休息', '睡', 'nap', 'rest'])) return 'rest';
+  if (matchesAny(haystack, ['通勤', '路上', '出发', 'commute'])) return 'commute';
+  if (allowedTypes) return null;
+  if (matchesAny(haystack, ['openclaw', 'alayabox', 'alayajet', 'b300', 'debug', '代码', '深度工作', '项目推进', '修复', '调试'])) return 'work';
+  if (matchesAny(haystack, ['note', 'state_event', 'schedule_event', '记录', '确认'])) return 'note';
+  return null;
+}
+
+const timelineTagDisplayTypes = {
+  work: 'work',
+  writing: 'work',
+  code: 'work',
+  design: 'work',
+  docs: 'work',
+  research: 'work',
+  debug: 'work',
+  review: 'work',
+  project_progress: 'work',
+  study: 'study',
+  reading: 'study',
+  papers: 'study',
+  courses: 'study',
+  tech_learning: 'study',
+  english: 'study',
+  notes: 'study',
+  meeting: 'meeting',
+  meeting_session: 'meeting',
+  ask_help: 'meeting',
+  reporting: 'meeting',
+  collaboration: 'meeting',
+  client_communication: 'meeting',
+  personal_communication: 'meeting',
+  rest: 'rest',
+  sleep: 'rest',
+  downtime: 'rest',
+  videos: 'rest',
+  movie: 'rest',
+  travel: 'rest',
+  meals: 'meal',
+  exercise: 'health',
+  workout: 'health',
+  running: 'health',
+  swimming: 'health',
+  stretching: 'health',
+  ball_sports: 'health',
+  admin: 'admin',
+  reimbursement: 'admin',
+  organize: 'admin',
+  purchase: 'admin',
+  appointment: 'admin',
+  payment: 'admin',
+  admin_process: 'admin',
+  commute: 'commute',
+};
+
+const timelineTagNameDisplayTypes = {
+  工作: 'work',
+  写作: 'work',
+  代码: 'work',
+  设计: 'work',
+  文档: 'work',
+  调研: 'work',
+  debug: 'work',
+  复盘: 'work',
+  项目推进: 'work',
+  学习: 'study',
+  看书: 'study',
+  论文: 'study',
+  课程: 'study',
+  技术学习: 'study',
+  英语: 'study',
+  笔记: 'study',
+  沟通: 'meeting',
+  会议: 'meeting',
+  请教: 'meeting',
+  汇报: 'meeting',
+  协作讨论: 'meeting',
+  客户沟通: 'meeting',
+  私人沟通: 'meeting',
+  休息: 'rest',
+  睡觉: 'rest',
+  放空: 'rest',
+  看视频: 'rest',
+  看电影: 'rest',
+  旅行: 'rest',
+  吃饭: 'meal',
+  运动: 'health',
+  健身: 'health',
+  跑步: 'health',
+  游泳: 'health',
+  拉伸: 'health',
+  球类: 'health',
+  事务: 'admin',
+  报销: 'admin',
+  整理: 'admin',
+  采购: 'admin',
+  预约: 'admin',
+  缴费: 'admin',
+  行政: 'admin',
+  通勤: 'commute',
+};
+
+function timelineDisplayTypeFromTags(item) {
+  for (const tagKey of item.tagKeys || []) {
+    const displayType = timelineTagDisplayTypes[String(tagKey).toLowerCase()];
+    if (displayType) return displayType;
+  }
+
+  for (const tagName of item.tags || []) {
+    const displayType = timelineTagNameDisplayTypes[String(tagName).toLowerCase()] || timelineTagNameDisplayTypes[tagName];
+    if (displayType) return displayType;
+  }
+
+  return null;
+}
+
+function matchesAny(value, needles) {
+  return needles.some((needle) => value.includes(needle.toLowerCase()));
 }
 
 function isSameLocalDate(value, target = new Date()) {

@@ -16,11 +16,15 @@ export function dashboard() {
   archiveExpiredGoals();
 
   const timeline = all(
-    `SELECT timeline_entries.*, tasks.title AS task_title, tasks.task_code
-     FROM timeline_entries
-     LEFT JOIN tasks ON tasks.task_id = timeline_entries.task_id
-     ORDER BY start_at DESC
-     LIMIT 20`,
+    `SELECT *
+     FROM (
+       SELECT timeline_entries.*, tasks.title AS task_title, tasks.task_code
+       FROM timeline_entries
+       LEFT JOIN tasks ON tasks.task_id = timeline_entries.task_id
+       ORDER BY timeline_entries.start_at DESC
+       LIMIT 200
+     )
+     ORDER BY start_at ASC`,
   ).map((entry) => ({
     ...entry,
     tags: tagNamesFor(entry.timeline_id),
@@ -452,12 +456,18 @@ export function updateGoal(goalId, payload) {
 export function updateTimeline(timelineId, payload) {
   const existing = get('SELECT * FROM timeline_entries WHERE timeline_id = ?', [timelineId]);
   if (!existing) return dashboard();
+  const startAt = payload.startAt || payload.start_at || existing.start_at;
+  const hasEndAt = Object.hasOwn(payload, 'endAt') || Object.hasOwn(payload, 'end_at');
+  const endAt = hasEndAt ? (payload.endAt ?? payload.end_at ?? null) : existing.end_at;
 
   run(
     `UPDATE timeline_entries
-     SET title = ?, description = ?, quality = ?, kind = ?, task_id = ?
+     SET start_at = ?, end_at = ?, local_date = ?, title = ?, description = ?, quality = ?, kind = ?, task_id = ?
      WHERE timeline_id = ?`,
     [
+      startAt,
+      endAt,
+      today(startAt),
       String(payload.title || existing.title).trim(),
       payload.description ?? existing.description ?? '',
       payload.quality === '' || payload.quality == null ? null : Number(payload.quality),
