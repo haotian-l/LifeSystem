@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -10,6 +11,7 @@ import {
   createTimelineEntry,
   createMoment,
   updateMoment,
+  deleteMoment,
   createPerson,
   updatePerson,
   ingestOpenClaw,
@@ -18,6 +20,8 @@ import {
   updateTimeline,
   createTask,
   updateTask,
+  restoreTask,
+  setTaskDayPlan,
   createTag,
   updateTag,
   deleteTag,
@@ -36,6 +40,7 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const distDir = path.join(rootDir, 'dist');
+const momentImageDir = path.join(rootDir, 'data', 'moment-images');
 const port = Number(process.env.PORT || 4173);
 
 initDb(path.join(rootDir, 'data', 'self.sqlite'));
@@ -68,10 +73,23 @@ const server = createServer(async (req, res) => {
       return json(res, createMoment(body));
     }
 
+    if (url.pathname === '/api/moment-images' && req.method === 'POST') {
+      const body = await readJson(req);
+      return json(res, await saveMomentImage(body));
+    }
+
     const momentMatch = url.pathname.match(/^\/api\/moments\/([^/]+)$/);
     if (momentMatch && req.method === 'PATCH') {
       const body = await readJson(req);
-      return json(res, updateMoment(momentMatch[1], body));
+      const result = updateMoment(momentMatch[1], body);
+      await Promise.all((result.removedImageUrls || []).map(removeMomentImage));
+      return json(res, result);
+    }
+
+    if (momentMatch && req.method === 'DELETE') {
+      const result = deleteMoment(momentMatch[1]);
+      await Promise.all((result.deleted?.imageUrls || []).map(removeMomentImage));
+      return json(res, result);
     }
 
     if (url.pathname === '/api/people' && req.method === 'POST') {
@@ -105,6 +123,17 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/tasks' && req.method === 'POST') {
       const body = await readJson(req);
       return json(res, createTask(body));
+    }
+
+    const taskRestoreMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/restore$/);
+    if (taskRestoreMatch && req.method === 'POST') {
+      return json(res, restoreTask(taskRestoreMatch[1]));
+    }
+
+    const taskDayPlanMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/day-plan$/);
+    if (taskDayPlanMatch && req.method === 'PUT') {
+      const body = await readJson(req);
+      return json(res, setTaskDayPlan(taskDayPlanMatch[1], body));
     }
 
     const taskMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)$/);
@@ -183,6 +212,10 @@ const server = createServer(async (req, res) => {
       return json(res, updateReview(reviewMatch[1], body));
     }
 
+    if (url.pathname.startsWith('/moment-images/') && req.method === 'GET') {
+      return serveMomentImage(url.pathname, res);
+    }
+
     return serveStatic(url.pathname, res);
   } catch (error) {
     res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -202,8 +235,50 @@ async function readJson(req) {
 }
 
 function json(res, payload) {
-  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.writeHead(200, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+  });
   res.end(JSON.stringify(payload));
+}
+
+async function saveMomentImage(payload = {}) {
+  const extensionByType = {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+  };
+  const mimeType = String(payload.mimeType || payload.mime_type || '');
+  const extension = extensionByType[mimeType];
+  const base64 = String(payload.data || '').replace(/^data:[^;]+;base64,/, '');
+  if (!extension || !base64) throw new Error('只支持 JPG、PNG、WebP 或 GIF 图片');
+  const file = Buffer.from(base64, 'base64');
+  if (!file.length || file.length > 8 * 1024 * 1024) throw new Error('照片大小必须在 8MB 以内');
+  const fileName = `${Date.now()}-${randomUUID()}.${extension}`;
+  await mkdir(momentImageDir, { recursive: true });
+  await writeFile(path.join(momentImageDir, fileName), file);
+  return { imageUrl: `/moment-images/${fileName}` };
+}
+
+async function removeMomentImage(imageUrl) {
+  if (!String(imageUrl || '').startsWith('/moment-images/')) return;
+  const fileName = path.basename(imageUrl);
+  try {
+    await unlink(path.join(momentImageDir, fileName));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
+async function serveMomentImage(urlPath, res) {
+  const fileName = path.basename(decodeURIComponent(urlPath));
+  const filePath = path.join(momentImageDir, fileName);
+  if (!fileName || !existsSync(filePath)) {
+    res.writeHead(404);
+    return res.end();
+  }
+  return sendFile(filePath, res);
 }
 
 async function serveStatic(urlPath, res) {
@@ -225,6 +300,11 @@ async function sendFile(filePath, res) {
     '.js': 'text/javascript; charset=utf-8',
     '.css': 'text/css; charset=utf-8',
     '.svg': 'image/svg+xml',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.webp': 'image/webp',
+    '.gif': 'image/gif',
   }[ext] || 'application/octet-stream';
 
   const file = await readFile(filePath);

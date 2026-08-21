@@ -25,18 +25,23 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
-const views = [
-  { id: 'today', label: '今日', icon: Clock3 },
+const primaryViews = [
+  { id: 'week', label: '本周', icon: CalendarDays },
   { id: 'timeline', label: '时间线', icon: ListChecks },
-  { id: 'goals', label: '目标', icon: Target },
   { id: 'tasks', label: '任务', icon: ListTodo },
+  { id: 'goals', label: '目标', icon: Target },
+];
+
+const secondaryViews = [
   { id: 'habits', label: '习惯', icon: Repeat2 },
   { id: 'schedule', label: '日程', icon: CalendarClock },
   { id: 'tags', label: '标签', icon: Tags },
   { id: 'reports', label: '复盘', icon: Sparkles },
   { id: 'moments', label: '高光', icon: Images },
-  { id: 'people-relations', label: '关系', icon: UsersRound },
+  { id: 'people-relations', label: '人物', icon: UsersRound },
 ];
+
+const views = [...primaryViews, ...secondaryViews];
 
 const levelLabels = { day: '每日', week: '每周', month: '每月', year: '每年' };
 const goalLevelOrder = ['day', 'week', 'month', 'year'];
@@ -90,13 +95,9 @@ const tagCategoryLabels = {
   activity_type: '活动',
   work_mode: '工作模式',
   value_signal: '价值',
-  state_signal: '过程状态',
-  energy_state: '身体精力',
-  mood_state: '情绪',
-  environment: '场景',
   life_area: '领域',
 };
-const tagCategoryOptions = ['activity_type', 'work_mode', 'value_signal', 'state_signal', 'energy_state', 'mood_state', 'environment', 'life_area'];
+const tagCategoryOptions = ['activity_type', 'work_mode', 'value_signal', 'life_area'];
 const tagCategoryRank = new Map(tagCategoryOptions.map((category, index) => [category, index]));
 
 const api = {
@@ -106,6 +107,8 @@ const api = {
   updateTimeline: (timelineId, payload) => request(`/api/timeline/${timelineId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   createTask: (payload) => request('/api/tasks', { method: 'POST', body: JSON.stringify(payload) }),
   updateTask: (taskId, payload) => request(`/api/tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  restoreTask: (taskId) => request(`/api/tasks/${taskId}/restore`, { method: 'POST' }),
+  setTaskDayPlan: (taskId, payload) => request(`/api/tasks/${taskId}/day-plan`, { method: 'PUT', body: JSON.stringify(payload) }),
   createTag: (payload) => request('/api/tags', { method: 'POST', body: JSON.stringify(payload) }),
   updateTag: (tagId, payload) => request(`/api/tags/${encodeURIComponent(tagId)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteTag: (tagId) => request(`/api/tags/${encodeURIComponent(tagId)}`, { method: 'DELETE' }),
@@ -115,6 +118,10 @@ const api = {
   createSchedule: (payload) => request('/api/schedule', { method: 'POST', body: JSON.stringify(payload) }),
   updateSchedule: (eventId, payload) => request(`/api/schedule/${eventId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   updateReview: (reviewId, payload) => request(`/api/reviews/${reviewId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  createMoment: (payload) => request('/api/moments', { method: 'POST', body: JSON.stringify(payload) }),
+  updateMoment: (momentId, payload) => request(`/api/moments/${momentId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteMoment: (momentId) => request(`/api/moments/${momentId}`, { method: 'DELETE' }),
+  uploadMomentImage: (payload) => request('/api/moment-images', { method: 'POST', body: JSON.stringify(payload) }),
 };
 
 async function request(path, options = {}) {
@@ -128,7 +135,7 @@ async function request(path, options = {}) {
 
 function App() {
   const [data, setData] = useState(null);
-  const [activeView, setActiveView] = useState('today');
+  const [activeView, setActiveView] = useState('week');
   const [loadError, setLoadError] = useState('');
   const [editor, setEditor] = useState(null);
   const [activeReport, setActiveReport] = useState('day');
@@ -172,6 +179,14 @@ function App() {
     setData(await api.updateTask(taskId, payload));
   }
 
+  async function restoreTask(taskId) {
+    setData(await api.restoreTask(taskId));
+  }
+
+  async function setTaskDayPlan(taskId, payload) {
+    setData(await api.setTaskDayPlan(taskId, payload));
+  }
+
   async function createTag(payload) {
     setData(await api.createTag(payload));
   }
@@ -208,6 +223,18 @@ function App() {
     setData(await api.updateSchedule(eventId, payload));
   }
 
+  async function createMoment(payload) {
+    setData(await api.createMoment(payload));
+  }
+
+  async function updateMoment(momentId, payload) {
+    setData(await api.updateMoment(momentId, payload));
+  }
+
+  async function deleteMoment(momentId) {
+    setData(await api.deleteMoment(momentId));
+  }
+
   if (loadError && !data) {
     return (
       <main className="loading-screen">
@@ -229,37 +256,46 @@ function App() {
 
   const latestReportRange = completedReviewRange(activeReport);
   const latestReport = data.reports.find((report) => report.period_type === activeReport && reviewOverlapsRange(report, latestReportRange)) || null;
+  const activeViewTitle = activeView === 'week'
+    ? weekRelativeLabel(selectedDate)
+    : views.find((view) => view.id === activeView)?.label;
 
   return (
     <main className="app-shell">
-      <aside className="sidebar">
-        <nav aria-label="主视图">
-          {views.map((view) => {
-            const Icon = view.icon;
-            return (
-              <button
-                type="button"
-                key={view.id}
-                className={activeView === view.id ? 'active' : ''}
-                onClick={() => setActiveView(view.id)}
-              >
-                <Icon size={18} />
-                <span>{view.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-      </aside>
-
       <section className="workspace">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">个人工作台</p>
-            <h1>{views.find((view) => view.id === activeView)?.label}</h1>
-          </div>
-          <DateJump value={selectedDate} onChange={setSelectedDate} />
+        <header className="app-navigation">
+          <button type="button" className="app-brand" onClick={() => setActiveView('week')}>
+            个人工作台
+          </button>
+          <AppNavigation activeView={activeView} onSelect={setActiveView} />
         </header>
 
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">{activeView === 'week' ? formatWeekRange(selectedDate) : '个人工作台'}</p>
+            <h1>{activeViewTitle}</h1>
+          </div>
+          {['week', 'timeline'].includes(activeView) ? (
+            <WeekJump value={selectedDate} onChange={setSelectedDate} />
+          ) : (
+            <DateJump value={selectedDate} onChange={setSelectedDate} />
+          )}
+        </header>
+
+        {activeView === 'week' && (
+          <WeekView
+            data={data}
+            selectedDate={selectedDate}
+            onSelectDate={setSelectedDate}
+            onCreateTask={createTask}
+            onUpdateTask={updateTask}
+            onRestoreTask={restoreTask}
+            onSetTaskDayPlan={setTaskDayPlan}
+            onEditTimeline={(item) => setEditor({ type: 'timeline', item })}
+            onOpenTimeline={() => setActiveView('timeline')}
+            onOpenTasks={() => setActiveView('tasks')}
+          />
+        )}
         {activeView === 'today' && (
           <TodayView
             data={data}
@@ -339,7 +375,14 @@ function App() {
           />
         )}
         {activeView === 'moments' && (
-          <MomentsView moments={data.moments || []} />
+          <MomentsView
+            moments={data.moments || []}
+            tags={data.tags}
+            onCreate={createMoment}
+            onUpdate={updateMoment}
+            onDelete={deleteMoment}
+            onUploadImage={api.uploadMomentImage}
+          />
         )}
 
       </section>
@@ -354,6 +397,99 @@ function App() {
         />
       )}
     </main>
+  );
+}
+
+function AppNavigation({ activeView, onSelect }) {
+  const rootRef = useRef(null);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const secondaryActive = secondaryViews.some((view) => view.id === activeView);
+
+  useEffect(() => {
+    if (!moreOpen) return undefined;
+    function closeOnOutside(event) {
+      if (!rootRef.current?.contains(event.target)) setMoreOpen(false);
+    }
+    document.addEventListener('pointerdown', closeOnOutside);
+    return () => document.removeEventListener('pointerdown', closeOnOutside);
+  }, [moreOpen]);
+
+  function select(viewId) {
+    onSelect(viewId);
+    setMoreOpen(false);
+  }
+
+  return (
+    <nav className="top-navigation" aria-label="主视图" ref={rootRef}>
+      {primaryViews.map((view) => {
+        const Icon = view.icon;
+        return (
+          <button
+            type="button"
+            key={view.id}
+            className={activeView === view.id ? 'active' : ''}
+            onClick={() => select(view.id)}
+          >
+            <Icon size={16} />
+            <span>{view.label}</span>
+          </button>
+        );
+      })}
+      <div className="more-navigation">
+        <button
+          type="button"
+          className={secondaryActive ? 'active' : ''}
+          onClick={() => setMoreOpen((open) => !open)}
+          aria-haspopup="menu"
+          aria-expanded={moreOpen}
+        >
+          <span>{secondaryActive ? views.find((view) => view.id === activeView)?.label : '更多'}</span>
+          <ChevronDown size={14} />
+        </button>
+        {moreOpen ? (
+          <div className="more-navigation-menu" role="menu">
+            {secondaryViews.map((view) => {
+              const Icon = view.icon;
+              return (
+                <button type="button" role="menuitem" key={view.id} onClick={() => select(view.target || view.id)}>
+                  <Icon size={16} />
+                  <span>{view.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    </nav>
+  );
+}
+
+function WeekJump({ value, onChange }) {
+  const label = weekRelativeLabel(value);
+
+  function move(offset) {
+    const next = startOfWeek(dateFromKey(value));
+    next.setDate(next.getDate() + offset * 7);
+    onChange(localDateKey(next));
+  }
+
+  return (
+    <div className="week-jump" aria-label="切换周">
+      <button type="button" className="week-arrow" onClick={() => move(-1)} aria-label="上一周">
+        <ChevronLeft size={17} />
+      </button>
+      <button
+        type="button"
+        className="week-current"
+        onClick={() => onChange(localDateKey(new Date()))}
+        title={label === '本周' ? '当前周' : '返回本周'}
+      >
+        {label}
+      </button>
+      <button type="button" className="week-arrow" onClick={() => move(1)} aria-label="下一周">
+        <ChevronRight size={17} />
+      </button>
+    </div>
   );
 }
 
@@ -518,6 +654,309 @@ function DateJump({ value, onChange }) {
   );
 }
 
+function WeekView({ data, selectedDate, onSelectDate, onCreateTask, onUpdateTask, onRestoreTask, onSetTaskDayPlan, onEditTimeline, onOpenTimeline, onOpenTasks }) {
+  const [composerDate, setComposerDate] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const days = weekDates(selectedDate);
+  const dayKeys = new Set(days.map(localDateKey));
+  const weekStartKey = localDateKey(days[0]);
+  const weekEndKey = localDateKey(days[6]);
+  const selectedKey = selectedDate;
+  const selectedDay = dateFromKey(selectedKey);
+  const weekTasks = data.tasks.filter((task) => (
+    task.status !== 'deleted'
+    && taskWeekDisplayDates(task).some((dateKey) => dateKey >= weekStartKey && dateKey <= weekEndKey)
+  ));
+  const incompleteTasks = data.tasks.filter((task) => taskCurrentStatusOrder.includes(task.status));
+  const selectedCompletedTasks = data.tasks.filter((task) => (
+    task.status === 'done' && taskWeekDisplayDates(task).includes(selectedKey)
+  ));
+  const selectedAbandonedTasks = data.tasks.filter((task) => (
+    task.status === 'abandoned' && isSameLocalDate(task.status_updated_at, selectedKey)
+  ));
+  const selectedPlannedCount = incompleteTasks.filter((task) => (task.plannedDates || []).includes(selectedKey)).length;
+  const worklistTasks = sortWeekTaskList([...incompleteTasks, ...selectedCompletedTasks, ...selectedAbandonedTasks]);
+  const doneCount = weekTasks.filter((task) => task.status === 'done').length;
+  const plannedCount = weekTasks.filter((task) => (
+    (task.plannedDates || []).some((dateKey) => dateKey >= weekStartKey && dateKey <= weekEndKey)
+  )).length;
+  const taskSpans = layoutWeekTaskSpans(weekTasks, days);
+  const laneCount = Math.max(1, ...taskSpans.map((span) => span.lane + 1));
+  const weekTimeline = data.timeline.filter((item) => dayKeys.has(item.local_date || localDateKey(item.start_at)));
+
+  return (
+    <section className="week-layout">
+      <section className="week-board-panel">
+        <header className="week-overview-head">
+          <div>
+            <p className="eyebrow">一周任务安排</p>
+            <h2>周任务概览</h2>
+          </div>
+          <div className="week-summary-stats" aria-label="周任务统计">
+            <span><b>{plannedCount}</b> 已安排</span>
+            <span><b>{doneCount}</b> 已完成</span>
+            <span><b>{incompleteTasks.length}</b> 待完成</span>
+          </div>
+        </header>
+
+        <div className="week-board-scroll">
+          <div className="week-board" style={{ '--week-task-lanes': laneCount }}>
+            {days.map((day, index) => {
+              const dateKey = localDateKey(day);
+              const taskCount = weekTasks.filter((task) => taskCoversDate(task, dateKey)).length;
+              return (
+                <section
+                  className={['week-day', isSameLocalDate(day) ? 'today' : '', dateKey === selectedKey ? 'selected' : ''].filter(Boolean).join(' ')}
+                  data-day-index={index}
+                  key={dateKey}
+                >
+                  <button type="button" className="week-day-head" onClick={() => onSelectDate(dateKey)} aria-pressed={dateKey === selectedKey}>
+                    <div>
+                      <span>{formatWeekday(day)}</span>
+                      <strong>{day.getDate()}</strong>
+                    </div>
+                    <em>{taskCount}</em>
+                  </button>
+                  {!taskCount ? <p className="week-day-empty">这一天还没有任务</p> : <span />}
+                  <button type="button" className="week-add-task" onClick={() => setComposerDate(dateKey)}>
+                    <Plus size={14} />
+                    <span>添加任务</span>
+                  </button>
+                </section>
+              );
+            })}
+            <div className="week-task-spans" aria-label="周任务区间">
+              {taskSpans.map((span) => (
+                <WeekTaskBar
+                  span={span}
+                  onUpdate={(payload) => onUpdateTask(span.task.task_id, payload)}
+                  onRestore={() => onRestoreTask(span.task.task_id)}
+                  onDelete={() => setDeleteTarget(span.task)}
+                  key={span.key}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <details className="task-worklist" open={worklistTasks.length > 0}>
+          <summary>
+            <span>{selectedDay.getMonth() + 1}月{selectedDay.getDate()}日 · {formatWeekday(selectedDay)}</span>
+            <em>{selectedPlannedCount}</em>
+            <small>当天进行 {selectedPlannedCount}</small>
+            <small>待完成 {incompleteTasks.length}</small>
+            {selectedCompletedTasks.length ? <small>当天完成 {selectedCompletedTasks.length}</small> : null}
+            {selectedAbandonedTasks.length ? <small className="abandoned">当天放弃 {selectedAbandonedTasks.length}</small> : null}
+          </summary>
+          <div className="task-worklist-list">
+            {worklistTasks.map((task) => (
+              <WeekTaskItem
+                task={task}
+                planningDate={selectedKey}
+                plannedForDate={(task.plannedDates || []).includes(selectedKey)}
+                onUpdate={(payload) => onUpdateTask(task.task_id, payload)}
+                onToggleDate={task.status === 'done' || task.status === 'abandoned'
+                  ? null
+                  : (planned) => onSetTaskDayPlan(task.task_id, { localDate: selectedKey, planned })}
+                onRestore={() => onRestoreTask(task.task_id)}
+                onDelete={() => setDeleteTarget(task)}
+                key={task.task_id}
+              />
+            ))}
+            {!worklistTasks.length ? <p className="muted-text">当前没有待完成任务，这一天也没有终态记录。</p> : null}
+          </div>
+          <button type="button" className="text-button" onClick={onOpenTasks}>打开任务库</button>
+        </details>
+      </section>
+
+      <section className="panel week-timeline-preview">
+        <SectionHeader eyebrow="周记录" title={`${weekTimeline.length} 个时间块`} action="展开" onAction={onOpenTimeline} />
+        <WeekTimelineGrid items={weekTimeline} selectedDate={selectedDate} onEdit={onEditTimeline} compact />
+      </section>
+
+      {composerDate ? (
+        <WeekTaskModal
+          date={composerDate}
+          goals={data.goals}
+          onClose={() => setComposerDate(null)}
+          onCreate={async (payload) => {
+            await onCreateTask(payload);
+            setComposerDate(null);
+          }}
+        />
+      ) : null}
+
+      {deleteTarget ? (
+        <DeleteTaskModal
+          task={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={async () => {
+            await onUpdateTask(deleteTarget.task_id, { status: 'deleted' });
+            setDeleteTarget(null);
+          }}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function WeekTaskItem({ task, planningDate, plannedForDate, onUpdate, onToggleDate, onRestore, onDelete }) {
+  const done = task.status === 'done';
+  const abandoned = task.status === 'abandoned';
+  const planningLabel = isSameLocalDate(planningDate) ? '今天' : formatWeekday(dateFromKey(planningDate));
+  const overdue = task.due_at && !done && new Date(task.due_at) < new Date();
+  const visibleTags = (task.tags || []).slice(0, 2);
+
+  return (
+    <article className={done ? 'week-task list done' : `week-task list ${task.status}`}>
+      <div className="week-task-body">
+        <div className="week-task-title">
+          {abandoned ? (
+            <button type="button" className="week-task-abandoned-mark" onClick={onRestore} title="恢复任务" aria-label={`恢复 ${task.title}`}>
+              <X size={14} />
+            </button>
+          ) : (
+            <input
+              type="checkbox"
+              checked={done}
+              onChange={() => onUpdate({ status: done ? 'todo' : 'done' })}
+              aria-label={`${done ? '恢复' : '完成'} ${task.title}`}
+            />
+          )}
+          <strong>{task.title}</strong>
+        </div>
+        {task.description ? <p>{task.description}</p> : null}
+        <div className="week-task-meta">
+          <span className="task-code">{task.task_code}</span>
+          <span className={`priority priority-${taskPriorityLevel(task.priority)}`}>{taskPriorityLabel(task.priority)}优先级</span>
+          {task.goal_title ? <span className="goal" title={task.goal_title}>目标 · {task.goal_title}</span> : null}
+          {task.status === 'doing' ? <span className="status doing">进行中</span> : null}
+          {task.status === 'blocked' ? <span className="status blocked">阻塞</span> : null}
+          {visibleTags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}
+          {task.due_at ? <span className={overdue ? 'due overdue' : 'due'}>{formatDate(task.due_at)} 截止</span> : null}
+        </div>
+      </div>
+      <div className="week-task-actions">
+        {abandoned ? (
+          <em className="task-status-static">放弃</em>
+        ) : (
+          <TaskStatusMenu value={task.status} onChange={(status) => onUpdate({ status })} label={`更新 ${task.title} 状态`} />
+        )}
+        {abandoned ? (
+          <span className="week-task-day-state abandoned"><X size={14} />当天放弃</span>
+        ) : done ? (
+          <span className="week-task-day-state done"><Check size={14} />当天完成</span>
+        ) : (
+          <button
+            type="button"
+            className={plannedForDate ? 'week-task-schedule active' : 'week-task-schedule'}
+            onClick={() => onToggleDate(!plannedForDate)}
+            aria-pressed={plannedForDate}
+          >
+            {plannedForDate ? <Check size={14} /> : <CalendarDays size={14} />}
+            <span>{plannedForDate ? `${planningLabel}进行中` : `设为${planningLabel}进行中`}</span>
+          </button>
+        )}
+        {onDelete ? (
+          <button type="button" className="task-delete-trigger" onClick={onDelete} title="删除任务" aria-label={`删除 ${task.title}`}>
+            <Trash2 size={14} />
+          </button>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function WeekTaskBar({ span, onUpdate, onRestore, onDelete }) {
+  const { task, startIndex, endIndex, lane } = span;
+  const done = task.status === 'done';
+  const abandoned = task.status === 'abandoned';
+  const terminalAbandoned = abandoned && span.terminal;
+
+  return (
+    <article
+      className={terminalAbandoned ? 'week-task-bar abandoned' : done ? 'week-task-bar done' : `week-task-bar ${abandoned ? 'history' : task.status}`}
+      style={{ gridColumn: `${startIndex + 1} / ${endIndex + 2}`, gridRow: lane + 1 }}
+    >
+      {terminalAbandoned ? (
+        <button type="button" className="week-task-abandoned-mark" onClick={onRestore} title="恢复任务" aria-label={`恢复 ${task.title}`}>
+          <X size={14} />
+        </button>
+      ) : abandoned ? (
+        <span className="week-task-history-mark" aria-hidden="true" />
+      ) : (
+        <input
+          type="checkbox"
+          checked={done}
+          onChange={() => onUpdate({ status: done ? 'todo' : 'done' })}
+          aria-label={`${done ? '恢复' : '完成'} ${task.title}`}
+        />
+      )}
+      <div className="week-task-bar-main" title={`${task.title} · ${formatWeekTaskBarRange(span)}`}>
+        <strong>{task.title}</strong>
+        <span>{formatWeekTaskBarRange(span)}</span>
+      </div>
+      <button type="button" className="task-delete-trigger" onClick={onDelete} title="删除任务" aria-label={`删除 ${task.title}`}>
+        <Trash2 size={13} />
+      </button>
+    </article>
+  );
+}
+
+function WeekTaskModal({ date, goals, onClose, onCreate }) {
+  const [draft, setDraft] = useState({ title: '', priority: 3, dueDate: '', goalId: '' });
+
+  async function submit(event) {
+    event.preventDefault();
+    const title = draft.title.trim();
+    if (!title) return;
+    await onCreate({
+      title,
+      priority: draft.priority,
+      goalId: draft.goalId || null,
+      plannedDate: date,
+      dueAt: draft.dueDate ? `${draft.dueDate}T18:00:00` : null,
+    });
+  }
+
+  return (
+    <FormModal title="新增任务" onClose={onClose}>
+      <form className="edit-form" onSubmit={submit}>
+        <label>
+          任务
+          <input autoFocus required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="这一天下一步要完成什么？" />
+        </label>
+        <p className="form-hint">安排到 {formatWeekday(dateFromKey(date))} · {dateFromKey(date).getMonth() + 1}月{dateFromKey(date).getDate()}日</p>
+        <div className="two-col">
+          <label>
+            优先级
+            <select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: Number(event.target.value) })}>
+              <option value="1">高</option>
+              <option value="3">中</option>
+              <option value="5">低</option>
+            </select>
+          </label>
+          <label>
+            截止日期
+            <input type="date" value={draft.dueDate} onChange={(event) => setDraft({ ...draft, dueDate: event.target.value })} />
+          </label>
+        </div>
+        <label>
+          关联目标
+          <select value={draft.goalId} onChange={(event) => setDraft({ ...draft, goalId: event.target.value })}>
+            <option value="">不关联</option>
+            {goals.filter(isCurrentGoal).map((goal) => <option value={goal.goal_id} key={goal.goal_id}>{goal.title}</option>)}
+          </select>
+        </label>
+        <button className="primary-button" type="submit">
+          <Plus size={16} />
+          <span>添加任务</span>
+        </button>
+      </form>
+    </FormModal>
+  );
+}
+
 function TodayView({ data, selectedDate, latestReport, onLogHabit, onEditTimeline, onOpenGoals, onOpenTasks, onOpenTimeline, onOpenHabits, onOpenSchedule, onUpdateTask }) {
   const topGoals = data.goals.filter(isCurrentGoal).slice(0, 3);
   const todayTimeline = data.timeline.filter((item) => isSameLocalDate(item.start_at, selectedDate));
@@ -617,7 +1056,7 @@ function HabitsView({ habits, habitLogs, tags, onCreate, onUpdate, onLog }) {
   const makeDraft = () => ({
     title: '',
     note: '',
-    tagIds: tagIdsByKeys(tags, ['high_value']),
+    tagIds: [],
   });
   const [draft, setDraft] = useState(makeDraft);
   const [creating, setCreating] = useState(false);
@@ -743,7 +1182,7 @@ function TasksView({ tasks, goals, tags, onCreate, onUpdate }) {
     priority: 3,
     dueDate: '',
     goalId: goals[0]?.goal_id || '',
-    tagIds: tagIdsByKeys(tags, ['high_value']),
+    tagIds: [],
   });
   const [draft, setDraft] = useState(makeDraft);
   const [creating, setCreating] = useState(false);
@@ -1085,10 +1524,11 @@ function TagsView({ tags, onCreate, onUpdate, onDelete }) {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [mode, setMode] = useState('active');
   const [activeCategory, setActiveCategory] = useState('activity_type');
-  const tree = useMemo(() => buildTagTree(tags, true), [tags]);
-  const parentOptions = useMemo(() => tags.filter((tag) => !tag.parent_tag_id), [tags]);
-  const activeTags = tags.filter((tag) => tag.is_active !== 0);
-  const inactiveTags = tags.filter((tag) => tag.is_active === 0);
+  const managedTags = useMemo(() => tags.filter((tag) => tagCategoryOptions.includes(tag.category)), [tags]);
+  const tree = useMemo(() => buildTagTree(managedTags, true), [managedTags]);
+  const parentOptions = useMemo(() => managedTags.filter((tag) => !tag.parent_tag_id), [managedTags]);
+  const activeTags = managedTags.filter((tag) => tag.is_active !== 0);
+  const inactiveTags = managedTags.filter((tag) => tag.is_active === 0);
   const visibleTags = mode === 'active' ? activeTags : inactiveTags;
   const visibleTree = useMemo(() => buildTagTree(visibleTags, true), [visibleTags]);
   const visibleParents = visibleTree.byCategory[activeCategory] || [];
@@ -1434,7 +1874,7 @@ function GoalsView({ goals, tags, onCreate, onUpdate, onEdit }) {
     title: '',
     level,
     successCriteria: '',
-    tagIds: tagIdsByKeys(tags, ['high_value']),
+    tagIds: [],
   });
   const [draft, setDraft] = useState(makeDraft);
   const [creating, setCreating] = useState(false);
@@ -1639,20 +2079,89 @@ function GoalsView({ goals, tags, onCreate, onUpdate, onEdit }) {
 }
 
 function TimelineView({ items, selectedDate, onEdit }) {
-  const todayTimeline = items.filter((item) => isSameLocalDate(item.start_at, selectedDate));
+  const days = weekDates(selectedDate);
+  const dayKeys = new Set(days.map(localDateKey));
+  const weekItems = items.filter((item) => dayKeys.has(item.local_date || localDateKey(item.start_at)));
 
   return (
     <section className="panel timeline-page">
-      <SectionHeader eyebrow="时间线" title="24 小时日视图" />
-      <DayTimeline items={todayTimeline} selectedDate={selectedDate} onEdit={onEdit} full />
+      <SectionHeader eyebrow="一周时间线" title={`${weekItems.length} 个时间块 · ${formatWeekRange(selectedDate)}`} />
+      <WeekTimelineGrid items={weekItems} selectedDate={selectedDate} onEdit={onEdit} />
     </section>
   );
 }
 
-function MomentsView({ moments }) {
+function WeekTimelineGrid({ items, selectedDate, onEdit, compact = false }) {
+  const days = weekDates(selectedDate);
+  const height = compact ? 480 : 960;
+  const hours = compact ? [0, 6, 12, 18, 24] : Array.from({ length: 9 }, (_, index) => index * 3);
+
+  return (
+    <div className={compact ? 'week-timeline-scroll compact' : 'week-timeline-scroll'}>
+      <div className="week-timeline-canvas">
+        <div className="week-timeline-days">
+          <span />
+          {days.map((day) => (
+            <div className={isSameLocalDate(day) ? 'today' : ''} key={localDateKey(day)}>
+              <strong>{formatWeekday(day)}</strong>
+              <span>{day.getMonth() + 1}/{day.getDate()}</span>
+            </div>
+          ))}
+        </div>
+        <div className="week-timeline-body" style={{ '--week-timeline-height': `${height}px` }}>
+          <div className="week-time-axis" aria-hidden="true">
+            {hours.map((hour) => (
+              <span style={{ top: `${(hour / 24) * height}px` }} key={hour}>{formatHour(hour)}</span>
+            ))}
+          </div>
+          <div className="week-time-tracks">
+            {days.map((day) => {
+              const dayItems = items
+                .filter((item) => isSameLocalDate(item.start_at, day))
+                .sort((a, b) => new Date(a.start_at) - new Date(b.start_at));
+              return (
+                <div className={isSameLocalDate(day) ? 'week-time-track today' : 'week-time-track'} key={localDateKey(day)}>
+                  {hours.map((hour) => <i className="week-time-line" style={{ top: `${(hour / 24) * height}px` }} key={hour} />)}
+                  {isSameLocalDate(day) ? (
+                    <i className="week-now-line" style={{ top: `${(minutesOfDay(new Date()) / 1440) * height}px` }} />
+                  ) : null}
+                  {dayItems.map((item) => {
+                    const start = clampMinute(minutesOfDay(item.start_at));
+                    const endValue = item.end_at ? clampMinute(minutesOfDay(item.end_at)) : Math.max(start + 30, minutesOfDay(new Date()));
+                    const end = endValue <= start ? Math.min(1440, start + 30) : endValue;
+                    const top = (start / 1440) * height;
+                    const eventHeight = Math.max(compact ? 18 : 28, ((end - start) / 1440) * height);
+                    return (
+                      <button
+                        type="button"
+                        className={`week-timeline-event type-${timelineDisplayType(item)}`}
+                        style={{ top: `${top}px`, height: `${eventHeight}px` }}
+                        onClick={() => onEdit(item)}
+                        title={`${formatTime(item.start_at)} ${item.title}`}
+                        key={item.timeline_id}
+                      >
+                        <span>{formatTime(item.start_at)}</span>
+                        <strong>{item.title}</strong>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MomentsView({ moments, tags, onCreate, onUpdate, onDelete, onUploadImage }) {
   const [range, setRange] = useState('year');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
+  const [editor, setEditor] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [lightbox, setLightbox] = useState(null);
   const bounds = momentRangeBounds(range, customStart, customEnd);
   const filteredMoments = moments
     .filter((moment) => momentInRange(moment, bounds))
@@ -1662,7 +2171,7 @@ function MomentsView({ moments }) {
   return (
     <section className="moments-layout">
       <section className="panel">
-        <SectionHeader eyebrow="高光画册" title={`${filteredMoments.length} 个高光 · ${rangeText}`} />
+        <SectionHeader eyebrow="高光画册" title={`${filteredMoments.length} 个高光 · ${rangeText}`} action="新建" onAction={() => setEditor({ mode: 'create' })} />
         <div className="moment-toolbar">
           <div className="review-filters" aria-label="高光时间筛选">
             {momentRangeOrder.map((item) => (
@@ -1688,35 +2197,99 @@ function MomentsView({ moments }) {
 
       <section className="moment-gallery" aria-label="高光时刻画册">
         {filteredMoments.map((moment) => (
-          <MomentCard moment={moment} key={moment.moment_id} />
+          <MomentCard
+            moment={moment}
+            onEdit={() => setEditor({ mode: 'edit', moment })}
+            onDelete={() => setDeleteTarget(moment)}
+            onOpenImage={(index) => setLightbox({ moment, index })}
+            key={moment.moment_id}
+          />
         ))}
         {!filteredMoments.length ? <p className="muted-text">这段时间还没有高光。</p> : null}
       </section>
+
+      {editor ? (
+        <MomentEditorModal
+          editor={editor}
+          tags={tags}
+          onUploadImage={onUploadImage}
+          onClose={() => setEditor(null)}
+          onSave={async (payload) => {
+            if (editor.mode === 'edit') await onUpdate(editor.moment.moment_id, payload);
+            else await onCreate(payload);
+            setEditor(null);
+          }}
+        />
+      ) : null}
+
+      {deleteTarget ? (
+        <DeleteMomentModal
+          moment={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={async () => {
+            await onDelete(deleteTarget.moment_id);
+            setDeleteTarget(null);
+          }}
+        />
+      ) : null}
+
+      {lightbox ? (
+        <MomentLightbox
+          moment={lightbox.moment}
+          index={lightbox.index}
+          onChange={(index) => setLightbox({ ...lightbox, index })}
+          onClose={() => setLightbox(null)}
+        />
+      ) : null}
     </section>
   );
 }
 
-function MomentCard({ moment }) {
+function MomentCard({ moment, onEdit, onDelete, onOpenImage }) {
+  const images = momentImageUrls(moment);
+  const [activeImage, setActiveImage] = useState(0);
   const [imageFailed, setImageFailed] = useState(false);
-  const imageUrl = moment.image_url && !imageFailed ? moment.image_url : '';
+  const imageUrl = images[activeImage] && !imageFailed ? images[activeImage] : '';
   const dateText = formatFullDate(moment.happened_at || moment.local_date);
+
+  useEffect(() => {
+    if (activeImage >= images.length) setActiveImage(Math.max(0, images.length - 1));
+    setImageFailed(false);
+  }, [activeImage, images.length]);
+
+  function moveImage(offset) {
+    setActiveImage((index) => (index + offset + images.length) % images.length);
+  }
 
   return (
     <article className="moment-card">
+      <div className="moment-card-actions">
+        <button type="button" onClick={onEdit} title="编辑高光" aria-label={`编辑 ${moment.title}`}><Edit3 size={14} /></button>
+        <button type="button" onClick={onDelete} title="删除高光" aria-label={`删除 ${moment.title}`}><Trash2 size={14} /></button>
+      </div>
       <div className="moment-cover">
         {imageUrl ? (
-          <img src={imageUrl} alt={moment.title} onError={() => setImageFailed(true)} />
+          <button type="button" className="moment-image-open" onClick={() => onOpenImage(activeImage)} aria-label={`查看 ${moment.title} 大图`}>
+            <img src={imageUrl} alt={moment.title} onError={() => setImageFailed(true)} />
+          </button>
         ) : (
-          <div className="moment-cover-empty">
+          <button type="button" className="moment-cover-empty" onClick={onEdit} aria-label={`编辑 ${moment.title} 并添加照片`}>
             <Sparkles size={20} />
             <span>{formatDate(moment.local_date || moment.happened_at)}</span>
-          </div>
+            <em>点击添加照片</em>
+          </button>
         )}
+        {images.length > 1 ? (
+          <>
+            <button type="button" className="moment-image-nav previous" onClick={() => moveImage(-1)} aria-label="上一张照片"><ChevronLeft size={18} /></button>
+            <button type="button" className="moment-image-nav next" onClick={() => moveImage(1)} aria-label="下一张照片"><ChevronRight size={18} /></button>
+            <span className="moment-image-count">{activeImage + 1}/{images.length}</span>
+          </>
+        ) : null}
       </div>
       <div className="moment-card-body">
         <div className="moment-meta">
           <span>{dateText}</span>
-          <span>高光 {moment.importance || 1}/5</span>
         </div>
         <strong title={moment.title}>{moment.title}</strong>
         <p>{moment.story || '没有描述'}</p>
@@ -1724,6 +2297,203 @@ function MomentCard({ moment }) {
         <TagPills tags={moment.tags} />
       </div>
     </article>
+  );
+}
+
+function MomentLightbox({ moment, index, onChange, onClose }) {
+  const images = momentImageUrls(moment);
+  const activeIndex = Math.min(Math.max(0, index), Math.max(0, images.length - 1));
+  const imageUrl = images[activeIndex];
+
+  useEffect(() => {
+    function handleKeydown(event) {
+      if (event.key === 'Escape') onClose();
+      if (event.key === 'ArrowLeft' && images.length > 1) onChange((activeIndex - 1 + images.length) % images.length);
+      if (event.key === 'ArrowRight' && images.length > 1) onChange((activeIndex + 1) % images.length);
+    }
+    document.addEventListener('keydown', handleKeydown);
+    return () => document.removeEventListener('keydown', handleKeydown);
+  }, [activeIndex, images.length, onChange, onClose]);
+
+  if (!imageUrl) return null;
+  return (
+    <div className="moment-lightbox-backdrop" role="presentation">
+      <section className="moment-lightbox" role="dialog" aria-modal="true" aria-label={`${moment.title} 大图`}>
+        <button type="button" className="moment-lightbox-close" onClick={onClose} aria-label="关闭大图"><X size={20} /></button>
+        {images.length > 1 ? (
+          <button type="button" className="moment-lightbox-nav previous" onClick={() => onChange((activeIndex - 1 + images.length) % images.length)} aria-label="上一张照片"><ChevronLeft size={26} /></button>
+        ) : null}
+        <img src={imageUrl} alt={`${moment.title} ${activeIndex + 1}`} />
+        {images.length > 1 ? (
+          <button type="button" className="moment-lightbox-nav next" onClick={() => onChange((activeIndex + 1) % images.length)} aria-label="下一张照片"><ChevronRight size={26} /></button>
+        ) : null}
+        <footer>
+          <div><strong>{moment.title}</strong><span>{activeIndex + 1}/{images.length}</span></div>
+          <a className="secondary-button" href={imageUrl} download>下载原图</a>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function MomentEditorModal({ editor, tags, onUploadImage, onClose, onSave }) {
+  const moment = editor.moment || {};
+  const initialDate = moment.local_date || localDateKey(moment.happened_at || new Date());
+  const initialImageUrls = momentImageUrls(moment);
+  const [draft, setDraft] = useState({
+    title: moment.title || '',
+    story: moment.story || '',
+    date: initialDate,
+    imageUrls: initialImageUrls,
+    tagIds: moment.tagIds || [],
+  });
+  const [photoFiles, setPhotoFiles] = useState([]);
+  const [photoPreviews, setPhotoPreviews] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const photoPreviewRef = useRef([]);
+
+  useEffect(() => {
+    photoPreviewRef.current = photoPreviews;
+  }, [photoPreviews]);
+
+  useEffect(() => () => {
+    photoPreviewRef.current.forEach((preview) => URL.revokeObjectURL(preview));
+  }, []);
+
+  function choosePhotos(files) {
+    setError('');
+    const selectedFiles = [...(files || [])];
+    if (!selectedFiles.length) return;
+    if (selectedFiles.some((file) => file.size > 8 * 1024 * 1024)) {
+      setError('照片大小必须在 8MB 以内');
+      return;
+    }
+    const available = Math.max(0, 20 - draft.imageUrls.length - photoFiles.length);
+    const accepted = selectedFiles.slice(0, available);
+    setPhotoFiles((current) => [...current, ...accepted]);
+    setPhotoPreviews((current) => [...current, ...accepted.map((file) => URL.createObjectURL(file))]);
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    const title = draft.title.trim();
+    if (!title || saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      const uploadedImages = await Promise.all(photoFiles.map(async (file) => (
+        onUploadImage({ mimeType: file.type, data: await fileToBase64(file) })
+      )));
+      const imageUrls = [...draft.imageUrls, ...uploadedImages.map((image) => image.imageUrl)];
+      await onSave({
+        title,
+        story: draft.story.trim(),
+        happenedAt: `${draft.date}T12:00:00`,
+        imageUrls,
+        tagIds: draft.tagIds,
+      });
+    } catch (submitError) {
+      setError(submitError.message || '保存失败');
+      setSaving(false);
+    }
+  }
+
+  const photoItems = [
+    ...draft.imageUrls.map((url, index) => ({ url, type: 'saved', index })),
+    ...photoPreviews.map((url, index) => ({ url, type: 'new', index })),
+  ];
+
+  return (
+    <FormModal eyebrow={editor.mode === 'edit' ? '编辑' : '新建'} title={editor.mode === 'edit' ? '编辑高光' : '新增高光'} onClose={onClose}>
+      <form className="edit-form" onSubmit={submit}>
+        <label>
+          标题
+          <input autoFocus required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="这一刻为什么值得记住？" />
+        </label>
+        <label>
+          故事
+          <textarea value={draft.story} onChange={(event) => setDraft({ ...draft, story: event.target.value })} placeholder="记录发生了什么，以及它为什么重要" />
+        </label>
+        <label>
+          日期
+          <input type="date" required value={draft.date} onChange={(event) => setDraft({ ...draft, date: event.target.value })} />
+        </label>
+        <div className="moment-photo-editor multiple">
+          <header className="moment-photo-head">
+            <div><strong>照片</strong><span>记录这一刻的画面</span></div>
+            <em>{photoItems.length}/20</em>
+          </header>
+          {photoItems.length ? (
+            <div className="moment-photo-grid">
+              {photoItems.map((photo, displayIndex) => (
+                <figure key={`${photo.type}-${photo.url}`}>
+                  <img src={photo.url} alt={`高光照片 ${displayIndex + 1}`} />
+                  <button type="button" onClick={() => {
+                    if (photo.type === 'saved') {
+                      setDraft({ ...draft, imageUrls: draft.imageUrls.filter((_, index) => index !== photo.index) });
+                    } else {
+                      URL.revokeObjectURL(photo.url);
+                      setPhotoFiles((files) => files.filter((_, index) => index !== photo.index));
+                      setPhotoPreviews((previews) => previews.filter((_, index) => index !== photo.index));
+                    }
+                  }} aria-label={`移除第 ${displayIndex + 1} 张照片`}><X size={13} /></button>
+                </figure>
+              ))}
+              {photoItems.length < 20 ? (
+                <label className="moment-photo-add-tile">
+                  <Plus size={20} />
+                  <span>继续添加</span>
+                  <input type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif" onChange={(event) => choosePhotos(event.target.files)} />
+                </label>
+              ) : null}
+            </div>
+          ) : (
+            <label
+              className="moment-photo-drop"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                choosePhotos(event.dataTransfer.files);
+              }}
+            >
+              <span className="moment-photo-drop-icon"><Images size={24} /></span>
+              <strong>添加这一刻的照片</strong>
+              <span>点击选择或拖入图片</span>
+              <small>JPG、PNG、WebP、GIF · 单张不超过 8MB</small>
+              <input type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif" onChange={(event) => choosePhotos(event.target.files)} />
+            </label>
+          )}
+        </div>
+        <TagPicker tags={tags} selected={draft.tagIds} onChange={(tagIds) => setDraft({ ...draft, tagIds })} />
+        {error ? <p className="form-error">{error}</p> : null}
+        <button className="primary-button" type="submit" disabled={saving}>
+          <Check size={16} />
+          <span>{saving ? '保存中…' : '保存高光'}</span>
+        </button>
+      </form>
+    </FormModal>
+  );
+}
+
+function DeleteMomentModal({ moment, onClose, onConfirm }) {
+  return (
+    <div className="modal-backdrop">
+      <section className="modal-panel confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-moment-title">
+        <header className="modal-header">
+          <div>
+            <p className="eyebrow">二次确认</p>
+            <h2 id="delete-moment-title">删除「{moment.title}」？</h2>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} title="关闭"><X size={18} /></button>
+        </header>
+        <p className="confirm-copy">高光记录和本地照片会一起删除。</p>
+        <div className="modal-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+          <button type="button" className="danger-button" onClick={onConfirm}><Trash2 size={16} /><span>删除高光</span></button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -2771,11 +3541,16 @@ function TagPicker({ tags, selected, onChange }) {
   const tree = useMemo(() => buildTagTree(tags), [tags]);
   const tagById = useMemo(() => new Map(tags.map((tag) => [tag.tag_id, tag])), [tags]);
   const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const categories = useMemo(() => orderedTagCategories(tree.byCategory), [tree]);
   const selectedByCategory = useMemo(() => selected.reduce((acc, tagId) => {
     const tag = tagById.get(tagId);
     if (tag) acc[tag.category] = tagId;
     return acc;
   }, {}), [selected, tagById]);
+  const selectedTags = useMemo(() => selected.map((tagId) => tagById.get(tagId)).filter(Boolean), [selected, tagById]);
+  const [activeCategory, setActiveCategory] = useState(() => (
+    selectedTags[0]?.category || categories[0]?.[0] || ''
+  ));
   const [expandedByCategory, setExpandedByCategory] = useState({});
 
   useEffect(() => {
@@ -2788,6 +3563,12 @@ function TagPicker({ tags, selected, onChange }) {
     setExpandedByCategory((current) => ({ ...current, ...nextExpanded }));
   }, [selected, tagById, tree]);
 
+  useEffect(() => {
+    if (!categories.some(([category]) => category === activeCategory)) {
+      setActiveCategory(categories[0]?.[0] || '');
+    }
+  }, [activeCategory, categories]);
+
   function chooseTag(tag) {
     const sameCategoryIds = tags.filter((item) => item.category === tag.category).map((item) => item.tag_id);
     const next = selected.filter((tagId) => !sameCategoryIds.includes(tagId));
@@ -2795,81 +3576,99 @@ function TagPicker({ tags, selected, onChange }) {
     onChange(next);
   }
 
-  function clearCategory(category) {
-    const sameCategoryIds = tags.filter((tag) => tag.category === category).map((tag) => tag.tag_id);
-    onChange(selected.filter((tagId) => !sameCategoryIds.includes(tagId)));
-  }
+  const activeParents = categories.find(([category]) => category === activeCategory)?.[1] || [];
+  const activeSelectedTag = tagById.get(selectedByCategory[activeCategory]);
+  const selectedParentId = activeSelectedTag?.parent_tag_id || activeSelectedTag?.tag_id || '';
+  const expandedId = expandedByCategory[activeCategory] || selectedParentId;
+  const expandedParent = activeParents.find((tag) => (
+    expandedId === tag.tag_id
+    && (tree.childrenByParent[tag.tag_id] || []).length > 0
+  ));
+  const expandedChildren = expandedParent ? tree.childrenByParent[expandedParent.tag_id] || [] : [];
 
   return (
     <fieldset className="tag-picker">
-      <legend>标签</legend>
-      {orderedTagCategories(tree.byCategory).map(([category, parents]) => {
-        const selectedTag = tagById.get(selectedByCategory[category]);
-        const selectedParentId = selectedTag?.parent_tag_id || selectedTag?.tag_id || '';
-        const expandedId = expandedByCategory[category] || selectedParentId;
-        const expandedParent = parents.find((tag) => (
-          expandedId === tag.tag_id
-          && (tree.childrenByParent[tag.tag_id] || []).length > 0
-        ));
-        const expandedChildren = expandedParent ? tree.childrenByParent[expandedParent.tag_id] || [] : [];
-        const childListId = expandedParent ? `tag-children-${expandedParent.tag_id}` : undefined;
+      <legend>
+        <span>标签</span>
+        <small>{selectedTags.length ? `已选 ${selectedTags.length}` : '按分类选择'}</small>
+      </legend>
 
-        return (
-          <div className="tag-group" key={category}>
-            <div className="tag-group-label">
-              <span>{tagCategoryLabels[category] || category}</span>
-              {selectedByCategory[category] ? (
-                <button type="button" onClick={() => clearCategory(category)}>清空</button>
-              ) : null}
-            </div>
-            <div className="tag-parent-list">
-              {parents.map((tag) => {
-                const children = tree.childrenByParent[tag.tag_id] || [];
-                const open = expandedParent?.tag_id === tag.tag_id;
-                const selected = selectedSet.has(tag.tag_id);
-                const childSelected = children.some((child) => selectedSet.has(child.tag_id));
-                const chipClassName = [
-                  'tag-chip',
-                  selected ? 'selected' : '',
-                  childSelected ? 'child-active' : '',
-                ].filter(Boolean).join(' ');
-                return (
-                  <div className={open ? 'tag-parent-block open' : 'tag-parent-block'} key={tag.tag_id}>
-                    <button
-                      type="button"
-                      className={chipClassName}
-                      onClick={() => {
-                        chooseTag(tag);
-                        if (children.length) {
-                          setExpandedByCategory((current) => ({ ...current, [category]: tag.tag_id }));
-                        }
-                      }}
-                      aria-expanded={children.length ? open : undefined}
-                      aria-controls={children.length ? childListId : undefined}
-                    >
-                      {tag.name}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-            {expandedParent ? (
-              <div className="tag-child-list" id={childListId}>
-                {expandedChildren.map((child) => (
-                  <button
-                    type="button"
-                    className={selected.includes(child.tag_id) ? 'tag-chip child selected' : 'tag-chip child'}
-                    key={child.tag_id}
-                    onClick={() => chooseTag(child)}
-                  >
-                    {child.name}
-                  </button>
-                ))}
-              </div>
-            ) : null}
+      {selectedTags.length ? (
+        <div className="tag-picker-selected" aria-label="已选标签">
+          {selectedTags.map((tag) => (
+            <button type="button" key={tag.tag_id} onClick={() => chooseTag(tag)} aria-label={`移除 ${tag.name}`}>
+              <span>{tag.name}</span>
+              <X size={12} />
+            </button>
+          ))}
+          <button type="button" className="clear" onClick={() => onChange([])}>清空</button>
+        </div>
+      ) : (
+        <p className="tag-picker-empty">选择能帮助后续筛选和复盘的标签。</p>
+      )}
+
+      <div className="tag-picker-categories" role="tablist" aria-label="标签分类">
+        {categories.map(([category]) => (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeCategory === category}
+            className={activeCategory === category ? 'active' : ''}
+            onClick={() => setActiveCategory(category)}
+            key={category}
+          >
+            <span>{tagCategoryLabels[category] || category}</span>
+            {selectedByCategory[category] ? <i /> : null}
+          </button>
+        ))}
+      </div>
+
+      <div className="tag-picker-options" role="tabpanel">
+        <div className="tag-parent-list">
+          {activeParents.map((tag) => {
+            const children = tree.childrenByParent[tag.tag_id] || [];
+            const open = expandedParent?.tag_id === tag.tag_id;
+            const tagSelected = selectedSet.has(tag.tag_id);
+            const childSelected = children.some((child) => selectedSet.has(child.tag_id));
+            const chipClassName = [
+              'tag-chip',
+              tagSelected ? 'selected' : '',
+              childSelected ? 'child-active' : '',
+            ].filter(Boolean).join(' ');
+            return (
+              <button
+                type="button"
+                className={chipClassName}
+                onClick={() => {
+                  chooseTag(tag);
+                  if (children.length) {
+                    setExpandedByCategory((current) => ({ ...current, [activeCategory]: tag.tag_id }));
+                  }
+                }}
+                aria-expanded={children.length ? open : undefined}
+                key={tag.tag_id}
+              >
+                {tag.name}
+              </button>
+            );
+          })}
+        </div>
+
+        {expandedParent ? (
+          <div className="tag-child-list">
+            {expandedChildren.map((child) => (
+              <button
+                type="button"
+                className={selectedSet.has(child.tag_id) ? 'tag-chip child selected' : 'tag-chip child'}
+                key={child.tag_id}
+                onClick={() => chooseTag(child)}
+              >
+                {child.name}
+              </button>
+            ))}
           </div>
-        );
-      })}
+        ) : null}
+      </div>
     </fieldset>
   );
 }
@@ -2951,11 +3750,6 @@ function emptyTagDraft(category = 'activity_type') {
   };
 }
 
-function tagIdsByKeys(tags, keys) {
-  const keySet = new Set(keys);
-  return tags.filter((tag) => keySet.has(tag.tag_key)).map((tag) => tag.tag_id);
-}
-
 function makeTagKey(value) {
   return String(value || '')
     .trim()
@@ -2963,6 +3757,20 @@ function makeTagKey(value) {
     .replace(/[^a-z0-9_ -]/g, '')
     .replace(/[\s-]+/g, '_')
     .slice(0, 40);
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
+    reader.onerror = () => reject(new Error('读取照片失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function momentImageUrls(moment) {
+  const images = (moment.images || []).map((image) => image.image_url).filter(Boolean);
+  return images.length ? images : [moment.image_url].filter(Boolean);
 }
 
 function formatTime(value) {
@@ -3217,6 +4025,144 @@ function endOfWeek(value) {
   date.setDate(date.getDate() + 6);
   date.setHours(23, 59, 59, 999);
   return date;
+}
+
+function weekDates(value) {
+  const start = startOfWeek(typeof value === 'string' ? dateFromKey(value) : value);
+  return Array.from({ length: 7 }, (_, index) => (
+    new Date(start.getFullYear(), start.getMonth(), start.getDate() + index)
+  ));
+}
+
+function formatWeekday(value) {
+  return new Date(value).toLocaleDateString('zh-CN', { weekday: 'short' }).replace('星期', '周');
+}
+
+function formatWeekRange(value) {
+  const [start, , , , , , end] = weekDates(value);
+  const startText = `${start.getMonth() + 1}月${start.getDate()}日`;
+  const endText = start.getMonth() === end.getMonth()
+    ? `${end.getDate()}日`
+    : `${end.getMonth() + 1}月${end.getDate()}日`;
+  return `${start.getFullYear()}年 · ${startText}—${endText}`;
+}
+
+function weekRelativeLabel(value) {
+  const selected = startOfWeek(typeof value === 'string' ? dateFromKey(value) : value);
+  const current = startOfWeek(new Date());
+  const offset = Math.round((selected.getTime() - current.getTime()) / (7 * 24 * 60 * 60 * 1000));
+  if (offset === 0) return '本周';
+  if (offset === -1) return '上周';
+  if (offset === 1) return '下周';
+  const end = endOfWeek(selected);
+  return `${selected.getMonth() + 1}/${selected.getDate()}—${end.getMonth() + 1}/${end.getDate()}`;
+}
+
+function taskCoversDate(task, dateKey) {
+  return taskWeekDisplayDates(task).includes(dateKey);
+}
+
+function sortWeekTaskList(tasks) {
+  return [...tasks].sort((a, b) => (
+    Number(['done', 'abandoned'].includes(a.status)) - Number(['done', 'abandoned'].includes(b.status))
+    || Number(a.status === 'abandoned') - Number(b.status === 'abandoned')
+    || taskCurrentStatusOrder.indexOf(a.status) - taskCurrentStatusOrder.indexOf(b.status)
+    || Number(a.priority || 3) - Number(b.priority || 3)
+    || new Date(a.created_at) - new Date(b.created_at)
+  ));
+}
+
+function taskWeekDisplayDates(task) {
+  if (task.status === 'done') {
+    const completedAuditDate = task.completed_at ? localDateKey(task.completed_at) : '';
+    return (task.plannedDates || []).filter((dateKey) => !completedAuditDate || dateKey <= completedAuditDate);
+  }
+  const abandonedDate = task.status === 'abandoned' && task.status_updated_at
+    ? localDateKey(task.status_updated_at)
+    : '';
+  const plannedDates = abandonedDate
+    ? (task.plannedDates || []).filter((dateKey) => dateKey <= abandonedDate)
+    : (task.plannedDates || []);
+  const dates = new Set(plannedDates);
+  if (abandonedDate) dates.add(abandonedDate);
+  return [...dates].sort();
+}
+
+function taskCompletionWorkDate(task) {
+  return task.status === 'done' ? taskWeekDisplayDates(task).at(-1) || '' : '';
+}
+
+function groupConsecutiveDates(dateKeys) {
+  return dateKeys.reduce((ranges, dateKey) => {
+    const current = ranges.at(-1);
+    if (current && dayDistance(current.end, dateKey) === 1) {
+      current.end = dateKey;
+    } else {
+      ranges.push({ start: dateKey, end: dateKey });
+    }
+    return ranges;
+  }, []);
+}
+
+function layoutWeekTaskSpans(tasks, days) {
+  const weekStartKey = localDateKey(days[0]);
+  const weekEndKey = localDateKey(days[6]);
+  const sorted = tasks.flatMap((task) => {
+    const terminalDate = task.status === 'done'
+      ? taskCompletionWorkDate(task)
+      : task.status === 'abandoned' && task.status_updated_at
+        ? localDateKey(task.status_updated_at)
+        : '';
+    return groupConsecutiveDates(taskWeekDisplayDates(task))
+      .filter((range) => range.start <= weekEndKey && range.end >= weekStartKey)
+      .map((range) => ({ task, range, terminal: Boolean(terminalDate && range.start <= terminalDate && range.end >= terminalDate) }));
+  }).sort((a, b) => (
+    a.range.start.localeCompare(b.range.start)
+    || b.range.end.localeCompare(a.range.end)
+    || Number(a.task.status === 'done') - Number(b.task.status === 'done')
+    || Number(a.task.priority || 3) - Number(b.task.priority || 3)
+  ));
+  const laneEnds = [];
+
+  return sorted.map(({ task, range, terminal }) => {
+    const startIndex = Math.max(0, dayDistance(weekStartKey, range.start));
+    const endIndex = Math.min(6, dayDistance(weekStartKey, range.end));
+    let lane = laneEnds.findIndex((laneEnd) => laneEnd < startIndex);
+    if (lane === -1) lane = laneEnds.length;
+    laneEnds[lane] = endIndex;
+    return { task, range, terminal, startIndex, endIndex, lane, key: `${task.task_id}-${range.start}-${range.end}` };
+  });
+}
+
+function dayDistance(fromKey, toKey) {
+  const from = dateFromKey(fromKey);
+  const to = dateFromKey(toKey);
+  const fromUtc = Date.UTC(from.getFullYear(), from.getMonth(), from.getDate());
+  const toUtc = Date.UTC(to.getFullYear(), to.getMonth(), to.getDate());
+  return Math.round((toUtc - fromUtc) / 86400000);
+}
+
+function formatWeekTaskBarRange(span) {
+  const start = dateFromKey(span.range.start);
+  const end = dateFromKey(span.range.end);
+  const startText = `${start.getMonth() + 1}/${start.getDate()}`;
+  const endText = `${end.getMonth() + 1}/${end.getDate()}`;
+  if (span.task.status === 'abandoned' && span.terminal) return `${endText} 放弃`;
+  if (span.task.status === 'done' && span.terminal) {
+    return startText === endText ? `${endText} 完成` : `${startText}—${endText} 完成`;
+  }
+  return startText === endText ? `${startText} 进行` : `${startText}—${endText} 进行`;
+}
+
+function taskPriorityLevel(priority) {
+  const value = Number(priority || 3);
+  if (value <= 2) return 'high';
+  if (value >= 4) return 'low';
+  return 'medium';
+}
+
+function taskPriorityLabel(priority) {
+  return { high: '高', medium: '中', low: '低' }[taskPriorityLevel(priority)];
 }
 
 function habitHeatmapYears(logs) {

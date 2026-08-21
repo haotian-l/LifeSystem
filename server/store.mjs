@@ -59,11 +59,15 @@ export function dashboard() {
          WHEN 'deleted' THEN 6
          ELSE 7
        END,
+       CASE WHEN tasks.planned_date IS NULL THEN 1 ELSE 0 END,
+       tasks.planned_date ASC,
+       tasks.planned_order ASC,
        tasks.priority ASC,
        COALESCE(tasks.due_at, tasks.created_at) ASC
      LIMIT 200`,
   ).map((task) => ({
     ...task,
+    plannedDates: all('SELECT local_date FROM task_day_plans WHERE task_id = ? ORDER BY local_date', [task.task_id]).map((row) => row.local_date),
     tags: tagNamesFor(task.task_id),
     tagIds: tagIdsFor(task.task_id),
     tagKeys: tagKeysFor(task.task_id),
@@ -83,6 +87,7 @@ export function dashboard() {
      LIMIT 300`,
   ).map((moment) => ({
     ...moment,
+    images: all('SELECT moment_image_id, image_url, sort_order FROM moment_images WHERE moment_id = ? ORDER BY sort_order, created_at', [moment.moment_id]),
     tags: tagNamesFor(moment.moment_id),
     tagIds: tagIdsFor(moment.moment_id),
     tagKeys: tagKeysFor(moment.moment_id),
@@ -241,6 +246,9 @@ export function createMoment(payload = {}) {
       : null
   );
   const momentId = id('moment');
+  const imageUrls = normalizeMomentImageUrls(
+    payload.imageUrls ?? payload.image_urls ?? [payload.imageUrl || payload.image_url || ''],
+  );
 
   run(
     `INSERT INTO moments
@@ -254,12 +262,13 @@ export function createMoment(payload = {}) {
       title,
       payload.story || payload.description || '',
       normalizeImportance(payload.importance),
-      payload.imageUrl || payload.image_url || '',
+      imageUrls[0] || '',
       payload.projectId || payload.project_id || null,
       payload.taskId || payload.task_id || null,
       payload.timelineId || payload.timeline_id || null,
     ],
   );
+  replaceMomentImages(momentId, imageUrls);
   replaceTags(momentId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
   replacePersonLinks('moment', momentId, personRefsFromPayload(payload));
 
@@ -270,6 +279,15 @@ export function updateMoment(momentId, payload = {}) {
   const existing = get('SELECT * FROM moments WHERE moment_id = ?', [momentId]);
   if (!existing) return dashboard();
   const happenedAt = payload.happenedAt || payload.happened_at || existing.happened_at;
+  const existingImageUrls = momentImageUrlsFor(momentId);
+  const hasImageUrls = Array.isArray(payload.imageUrls) || Array.isArray(payload.image_urls);
+  const hasLegacyImageUrl = Object.hasOwn(payload, 'imageUrl') || Object.hasOwn(payload, 'image_url');
+  const imageUrls = hasImageUrls
+    ? normalizeMomentImageUrls(payload.imageUrls ?? payload.image_urls)
+    : hasLegacyImageUrl
+      ? normalizeMomentImageUrls([payload.imageUrl ?? payload.image_url ?? ''])
+      : existingImageUrls;
+  const imageUrl = imageUrls[0] || '';
 
   run(
     `UPDATE moments
@@ -283,20 +301,63 @@ export function updateMoment(momentId, payload = {}) {
       String(payload.title || existing.title).trim(),
       payload.story ?? payload.description ?? existing.story ?? '',
       normalizeImportance(payload.importance ?? existing.importance),
-      payload.imageUrl ?? payload.image_url ?? existing.image_url ?? '',
+      imageUrl,
       payload.projectId ?? payload.project_id ?? existing.project_id ?? null,
       payload.taskId ?? payload.task_id ?? existing.task_id ?? null,
       payload.timelineId ?? payload.timeline_id ?? existing.timeline_id ?? null,
       momentId,
     ],
   );
+  if (hasImageUrls || hasLegacyImageUrl) replaceMomentImages(momentId, imageUrls);
   if (Array.isArray(payload.tagIds) || Array.isArray(payload.tagKeys)) {
     replaceTags(momentId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
   }
   if (hasPersonLinksPayload(payload)) {
     replacePersonLinks('moment', momentId, personRefsFromPayload(payload));
   }
-  return dashboard();
+  const result = dashboard();
+  const removedImageUrls = existingImageUrls.filter((url) => !imageUrls.includes(url));
+  return removedImageUrls.length
+    ? { ...result, removedImageUrls }
+    : result;
+}
+
+export function deleteMoment(momentId) {
+  const existing = get('SELECT moment_id FROM moments WHERE moment_id = ?', [momentId]);
+  if (!existing) return dashboard();
+  const deletedImageUrls = momentImageUrlsFor(momentId);
+  run('DELETE FROM record_tags WHERE record_id = ?', [momentId]);
+  run("DELETE FROM person_record_links WHERE record_type = 'moment' AND record_id = ?", [momentId]);
+  run('DELETE FROM moment_images WHERE moment_id = ?', [momentId]);
+  run('DELETE FROM moments WHERE moment_id = ?', [momentId]);
+  return {
+    ...dashboard(),
+    deleted: { momentId, imageUrls: deletedImageUrls },
+  };
+}
+
+function momentImageUrlsFor(momentId) {
+  return all(
+    'SELECT image_url FROM moment_images WHERE moment_id = ? ORDER BY sort_order, created_at',
+    [momentId],
+  ).map((row) => row.image_url);
+}
+
+function normalizeMomentImageUrls(imageUrls) {
+  return [...new Set((Array.isArray(imageUrls) ? imageUrls : [])
+    .map((url) => String(url || '').trim())
+    .filter(Boolean))].slice(0, 20);
+}
+
+function replaceMomentImages(momentId, imageUrls) {
+  run('DELETE FROM moment_images WHERE moment_id = ?', [momentId]);
+  imageUrls.forEach((imageUrl, index) => {
+    run(
+      `INSERT INTO moment_images (moment_image_id, moment_id, image_url, sort_order, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [id('moment_image'), momentId, imageUrl, index, now()],
+    );
+  });
 }
 
 export function createPerson(payload = {}) {
@@ -494,10 +555,12 @@ export function createTask(payload) {
   const taskCode = nextTaskCode();
   const status = normalizeTaskStatus(payload.status || 'todo');
   const timestamp = now();
+  const plannedDate = payload.plannedDate || payload.planned_date || null;
   run(
     `INSERT INTO tasks
-      (task_id, task_code, title, description, status, goal_id, project_id, parent_task_id, priority, due_at, created_at, status_updated_at, completed_at, outcome)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (task_id, task_code, title, description, status, goal_id, project_id, parent_task_id, priority,
+       planned_date, planned_order, due_at, created_at, status_updated_at, completed_at, outcome)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       taskId,
       taskCode,
@@ -508,6 +571,8 @@ export function createTask(payload) {
       payload.projectId || payload.project_id || null,
       payload.parentTaskId || payload.parent_task_id || null,
       Number(payload.priority || 3),
+      plannedDate,
+      Number(payload.plannedOrder ?? payload.planned_order ?? 0),
       payload.dueAt || payload.due_at || null,
       timestamp,
       timestamp,
@@ -515,6 +580,9 @@ export function createTask(payload) {
       payload.outcome || '',
     ],
   );
+  if (plannedDate) {
+    run('INSERT OR IGNORE INTO task_day_plans (task_id, local_date, created_at) VALUES (?, ?, ?)', [taskId, plannedDate, timestamp]);
+  }
   replaceTags(taskId, payload.tagIds ?? payload.tag_ids ?? payload.tagKeys ?? []);
   replacePersonLinks('task', taskId, personRefsFromPayload(payload));
   recordTaskEvent(taskId, 'created', null, status, payload.note || '');
@@ -531,11 +599,15 @@ export function updateTask(taskId, payload) {
   const completedAt = status === 'done'
     ? (existing.completed_at || timestamp)
     : null;
+  const hasPlannedDate = Object.hasOwn(payload, 'plannedDate') || Object.hasOwn(payload, 'planned_date');
+  const plannedDate = hasPlannedDate
+    ? (payload.plannedDate || payload.planned_date || null)
+    : (existing.planned_date || null);
 
   run(
     `UPDATE tasks
      SET title = ?, description = ?, status = ?, goal_id = ?, project_id = ?, parent_task_id = ?,
-         priority = ?, due_at = ?, status_updated_at = ?, completed_at = ?, outcome = ?
+         priority = ?, planned_date = ?, planned_order = ?, due_at = ?, status_updated_at = ?, completed_at = ?, outcome = ?
      WHERE task_id = ?`,
     [
       String(payload.title || existing.title).trim(),
@@ -545,6 +617,8 @@ export function updateTask(taskId, payload) {
       payload.projectId ?? payload.project_id ?? existing.project_id ?? null,
       payload.parentTaskId ?? payload.parent_task_id ?? existing.parent_task_id ?? null,
       Number(payload.priority || existing.priority || 3),
+      plannedDate,
+      Number(payload.plannedOrder ?? payload.planned_order ?? existing.planned_order ?? 0),
       payload.dueAt ?? payload.due_at ?? existing.due_at ?? null,
       statusChanged ? timestamp : (existing.status_updated_at || timestamp),
       completedAt,
@@ -560,6 +634,44 @@ export function updateTask(taskId, payload) {
     replacePersonLinks('task', taskId, personRefsFromPayload(payload));
   }
   if (statusChanged) recordTaskEvent(taskId, 'status_changed', existing.status, status, payload.note || '');
+  return dashboard();
+}
+
+export function restoreTask(taskId) {
+  const task = get('SELECT status FROM tasks WHERE task_id = ?', [taskId]);
+  if (!task || task.status !== 'abandoned') return dashboard();
+  const abandonedEvent = get(
+    `SELECT from_status
+     FROM task_events
+     WHERE task_id = ? AND to_status = 'abandoned'
+     ORDER BY happened_at DESC, rowid DESC
+     LIMIT 1`,
+    [taskId],
+  );
+  const restoreStatus = ['todo', 'doing', 'blocked'].includes(abandonedEvent?.from_status)
+    ? abandonedEvent.from_status
+    : 'todo';
+  return updateTask(taskId, { status: restoreStatus, note: '从放弃状态恢复' });
+}
+
+export function setTaskDayPlan(taskId, payload = {}) {
+  const task = get('SELECT task_id FROM tasks WHERE task_id = ?', [taskId]);
+  const localDate = String(payload.localDate || payload.local_date || '').trim();
+  if (!task || !/^\d{4}-\d{2}-\d{2}$/.test(localDate)) return dashboard();
+  const planned = payload.planned !== false;
+
+  if (planned) {
+    run(
+      'INSERT OR IGNORE INTO task_day_plans (task_id, local_date, created_at) VALUES (?, ?, ?)',
+      [taskId, localDate, now()],
+    );
+  } else {
+    run('DELETE FROM task_day_plans WHERE task_id = ? AND local_date = ?', [taskId, localDate]);
+  }
+
+  const firstPlan = get('SELECT MIN(local_date) AS local_date FROM task_day_plans WHERE task_id = ?', [taskId]);
+  run('UPDATE tasks SET planned_date = ? WHERE task_id = ?', [firstPlan?.local_date || null, taskId]);
+  recordTaskEvent(taskId, planned ? 'planned_for_day' : 'unplanned_for_day', null, null, localDate);
   return dashboard();
 }
 
@@ -869,7 +981,6 @@ export function generateReport(periodType) {
   ).count;
   const trackedHours = metrics(timeline).trackedHours;
   const activityFocus = topTagNames('activity_type');
-  const stateSignals = topTagNames('state_signal');
 
   const title = {
     day: '昨日系统复盘',
@@ -883,7 +994,6 @@ export function generateReport(periodType) {
     `行动：当前任务 ${activeTasks} 个，已完成 ${doneTasks} 个，沉淀 ${moments} 个高光。`,
     `节律：习惯完成 ${doneHabits} 次，当前习惯 ${activeHabits} 个，周期内日程 ${periodEvents} 个。`,
     `活动重心：${activityFocus.length ? activityFocus.join('、') : '暂无'}。`,
-    stateSignals.length ? `过程状态：${stateSignals.join('、')}。` : '过程状态：还没有足够记录，需要你补充推进是否顺畅、是否被打断或卡住。',
   ].join('\n');
 
   const generatedAt = now();
@@ -1087,11 +1197,21 @@ function createTables() {
       project_id TEXT,
       parent_task_id TEXT,
       priority INTEGER NOT NULL,
+      planned_date TEXT,
+      planned_order INTEGER NOT NULL DEFAULT 0,
       due_at TEXT,
       created_at TEXT NOT NULL,
       status_updated_at TEXT,
       completed_at TEXT,
       outcome TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS task_day_plans (
+      task_id TEXT NOT NULL,
+      local_date TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (task_id, local_date),
+      FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS task_events (
@@ -1156,6 +1276,15 @@ function createTables() {
       project_id TEXT,
       task_id TEXT,
       timeline_id TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS moment_images (
+      moment_image_id TEXT PRIMARY KEY,
+      moment_id TEXT NOT NULL,
+      image_url TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (moment_id) REFERENCES moments(moment_id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS tags (
@@ -1262,6 +1391,8 @@ function migrateTables() {
   ensureColumn('tasks', 'description', 'TEXT');
   ensureColumn('tasks', 'goal_id', 'TEXT');
   ensureColumn('tasks', 'parent_task_id', 'TEXT');
+  ensureColumn('tasks', 'planned_date', 'TEXT');
+  ensureColumn('tasks', 'planned_order', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('tasks', 'due_at', 'TEXT');
   ensureColumn('tasks', 'status_updated_at', 'TEXT');
   ensureColumn('tasks', 'completed_at', 'TEXT');
@@ -1280,6 +1411,13 @@ function migrateTables() {
   ensureColumn('reviews', 'updated_at', 'TEXT');
   ensureColumn('reviews', 'is_pinned', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('moments', 'image_url', 'TEXT');
+  run(
+    `INSERT OR IGNORE INTO moment_images (moment_image_id, moment_id, image_url, sort_order, created_at)
+     SELECT 'moment_image_' || moment_id, moment_id, image_url, 0, happened_at
+     FROM moments
+     WHERE image_url IS NOT NULL AND image_url <> ''
+       AND NOT EXISTS (SELECT 1 FROM moment_images WHERE moment_images.moment_id = moments.moment_id)`,
+  );
   ensureColumn('person_record_links', 'mention_text', 'TEXT');
   ensureColumn('person_record_links', 'confidence', 'REAL');
   run("UPDATE reports SET title = REPLACE(title, '系统复盘草稿', '系统复盘') WHERE title IN ('今日系统复盘草稿', '本周系统复盘草稿', '本月系统复盘草稿')");
@@ -1294,6 +1432,12 @@ function migrateTables() {
   ensureColumn('schedule_events', 'task_id', 'TEXT');
   ensureColumn('schedule_events', 'timeline_id', 'TEXT');
   run('UPDATE tasks SET status_updated_at = created_at WHERE status_updated_at IS NULL');
+  run(
+    `INSERT OR IGNORE INTO task_day_plans (task_id, local_date, created_at)
+     SELECT task_id, planned_date, COALESCE(status_updated_at, created_at)
+     FROM tasks
+     WHERE planned_date IS NOT NULL`,
+  );
   normalizeTagHierarchy();
 }
 
@@ -1411,24 +1555,6 @@ function seed() {
     ['tag_high', 'high_value', '高价值', 'value_signal', null, 10],
     ['tag_maintenance', 'maintenance', '维护', 'value_signal', null, 20],
     ['tag_low_value', 'low_value', '低价值', 'value_signal', null, 30],
-    ['tag_state_good', 'state_good', '顺畅', 'state_signal', null, 10],
-    ['tag_state_normal', 'state_normal', '平稳推进', 'state_signal', null, 20],
-    ['tag_state_bad', 'state_bad', '分心', 'state_signal', null, 30],
-    ['tag_focused', 'focused', '专注', 'state_signal', null, 40],
-    ['tag_interrupted', 'interrupted', '被打断', 'state_signal', null, 50],
-    ['tag_blocked', 'blocked', '卡住', 'state_signal', null, 60],
-    ['tag_low', 'low_quality', '低质量', 'state_signal', null, 70],
-    ['tag_energy_high', 'energy_high', '精力足', 'energy_state', null, 10],
-    ['tag_energy_normal', 'energy_normal', '精力一般', 'energy_state', null, 20],
-    ['tag_tired', 'tired', '疲惫', 'energy_state', null, 30],
-    ['tag_mood_calm', 'mood_calm', '平静', 'mood_state', null, 10],
-    ['tag_mood_happy', 'mood_happy', '开心', 'mood_state', null, 20],
-    ['tag_mood_anxious', 'mood_anxious', '焦虑', 'mood_state', null, 30],
-    ['tag_mood_low', 'mood_low', '低落', 'mood_state', null, 40],
-    ['tag_home', 'home', '在家', 'environment', null, 10],
-    ['tag_office', 'office', '办公室', 'environment', null, 20],
-    ['tag_outside', 'outside', '户外', 'environment', null, 30],
-    ['tag_on_road', 'on_road', '路上', 'environment', null, 40],
     ['tag_health', 'health', '健康', 'life_area', null, 10],
     ['tag_growth', 'growth', '成长', 'life_area', null, 20],
     ['tag_relationship', 'relationship', '关系', 'life_area', null, 30],
@@ -1453,6 +1579,7 @@ function syncOpenTagSet(defaultTags) {
   ['tag_deep', 'tag_golf'].forEach((tagId) => {
     run('UPDATE tags SET is_active = 0 WHERE tag_id = ?', [tagId]);
   });
+  run("UPDATE tags SET is_active = 0 WHERE category IN ('state_signal', 'energy_state', 'mood_state', 'environment')");
 }
 
 function createTimelineFromSchedule({ title, startAt, endAt, location = '', note = '', taskId = null, tagRefs = [] }) {
@@ -2021,7 +2148,7 @@ function normalizeTagCategory(value) {
   const category = String(value || '').trim();
   if (['hobby', 'hobbies', 'interest', 'interests', '爱好', '兴趣爱好'].includes(category)) return 'activity_type';
   if (['生活领域'].includes(category)) return 'life_area';
-  if (['activity_type', 'work_mode', 'value_signal', 'state_signal', 'energy_state', 'mood_state', 'environment', 'life_area'].includes(category)) return category;
+  if (['activity_type', 'work_mode', 'value_signal', 'life_area'].includes(category)) return category;
   return 'activity_type';
 }
 
@@ -2099,6 +2226,7 @@ function tagNamesFor(recordId) {
     `SELECT tags.name FROM record_tags
      JOIN tags ON tags.tag_id = record_tags.tag_id
      WHERE record_tags.record_id = ?
+       AND tags.is_active = 1
      ORDER BY
        tags.category,
        CASE
@@ -2113,7 +2241,14 @@ function tagNamesFor(recordId) {
 }
 
 function tagIdsFor(recordId) {
-  return all('SELECT tag_id FROM record_tags WHERE record_id = ? ORDER BY tag_id', [recordId]).map((row) => row.tag_id);
+  return all(
+    `SELECT record_tags.tag_id
+     FROM record_tags
+     JOIN tags ON tags.tag_id = record_tags.tag_id
+     WHERE record_tags.record_id = ? AND tags.is_active = 1
+     ORDER BY record_tags.tag_id`,
+    [recordId],
+  ).map((row) => row.tag_id);
 }
 
 function tagKeysFor(recordId) {
@@ -2122,6 +2257,7 @@ function tagKeysFor(recordId) {
      FROM record_tags
      JOIN tags ON tags.tag_id = record_tags.tag_id
      WHERE record_tags.record_id = ?
+       AND tags.is_active = 1
      ORDER BY tags.tag_key`,
     [recordId],
   ).map((row) => row.tag_key);
